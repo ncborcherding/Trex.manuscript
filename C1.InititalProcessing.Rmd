@@ -1,0 +1,524 @@
+---
+title: Initital processing of Renal Clear Cell Carcinoma samples
+author: 
+- name: Nick Borcherding
+  email: ncborch@gmail.com
+  affiliation: Washington University in St. Louis, School of Medicine, St. Louis, MO, USA
+date: "June 5, 2020"
+output:
+  BiocStyle::html_document:
+    toc_float: true
+
+---
+
+```{r, echo=FALSE, results="hide", message=FALSE}
+knitr::opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+library(BiocStyle)
+```
+
+# Introduction
+
+
+##Computer Info:
+Analysis is being run on a 13-inch Macbook Pro (2017) with 3.5 GHz Dual-Core i7 and 16 GB of 2133 MHz LPDDR3. There is a limit to the speed and RAM, so for the purposes of the markdown file, I will not run some of the code blocks during the kniting (look at eval = F). You will also see the call *rm()* frequently to just remove non-vital objects from the global environment.
+
+***
+
+# Loading Libraries
+
+In general I like to load libraries here that we will use universally, and then call other libraries when we need them in the code chunks that are relevant. 
+
+```{r}
+suppressPackageStartupMessages(library(Seurat))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(gridExtra))
+suppressPackageStartupMessages(library(viridis))
+suppressPackageStartupMessages(library(scDblFinder))
+```
+
+I also like to set a color palette before I begin - this way all the colors are consistent throughout the publication figures.
+
+```{r setup, include=FALSE}
+library(viridis)
+colorblind_vector <- viridis_pal()(7)
+```
+
+
+***
+
+# Loading and Processing the Data
+
+
+## Load Data
+```{r eval=FALSE}
+dir.create("dataExplore")
+dir.create("dataExplore/qc")
+"%!in%" <- Negate("%in%")
+file_list <- list.files("./data/SequencingRuns")
+list <- NULL
+for (i in seq_along(file_list)){
+    tmp <-  Read10X(paste0("./data/SequencingRuns/", file_list[i]))
+    s.obj <- CreateSeuratObject(tmp$`Gene Expression`, project = file_list[i])
+    adt_assay <- CreateAssayObject(counts = tmp$`Antibody Capture`[row.index,])
+    row.index <- which(rownames(adt_assay) %!in% c("TCRVa7.2-TotalSeqC","TCRVa24Ja18-TotalSeqC"))
+    
+  
+    # add this assay to the previously created Seurat object
+    s.obj[["ADT"]] <- adt_assay
+    s.obj <- RenameCells(object = s.obj, new.names = paste0(file_list[i], "_", rownames(s.obj[[]])))
+    s.obj<- subset(s.obj, subset = nFeature_RNA > 100)
+    s.obj[["mito.genes"]] <- PercentageFeatureSet(s.obj, pattern = "^MT-")
+    
+    p1 <- VlnPlot(object = s.obj, features = c("nCount_RNA")) + theme(legend.position = "none")
+    p2 <- VlnPlot(object = s.obj, features = c("nFeature_RNA")) + theme(legend.position = "none")
+    p3 <- VlnPlot(object = s.obj, features = c("mito.genes")) + theme(legend.position = "none")
+    
+    pdf(paste0("./dataExplore/qc/", file_list[i], ".pdf"), height = 8, width=12)
+    grid.arrange(p1, p2, p3, ncol = 3)
+    dev.off()
+    
+    ###########################
+  #Here is the filtering step
+  ############################
+  standev <- sd(log(s.obj$nFeature_RNA))*2.5 #cutting off above standard deviation of 2.5
+  mean <- mean(log(s.obj$nFeature_RNA))
+  cut <- round(exp(standev+mean))
+  s.obj <- subset(s.obj, subset = mito.genes < 10 & nFeature_RNA < cut)
+    
+   ###########################################
+  #Estimate Doublets for Each Sequencing Run
+  ############################################
+  sce <- as.SingleCellExperiment(s.obj)
+  sce <- scDblFinder(sce, BPPARAM=MulticoreParam(3))
+  doublets <- data.frame(db.weight.score = sce$scDblFinder.score, db.ratio = sce$scDblFinder.weighted, 
+                         db.class = sce$scDblFinder.class, db.score = sce$scDblFinder.score)
+  rownames(doublets) <- rownames(sce@colData)
+  s.obj <- AddMetaData(s.obj, doublets)
+  rm(sce)
+  
+  ####Adding meta data
+  directory <- readxl::read_xlsx("./data/sample.directory.xlsx") #Meta.data
+  meta <- s.obj[[]]
+  rownames <- rownames(meta)
+  meta <- merge(meta, directory, by.x = "orig.ident", by.y = "ID")
+  meta <- meta[,9:ncol(meta)]
+  rownames(meta) <- rownames
+  
+  s.obj <- AddMetaData(s.obj, meta)
+  
+    if (i == 1) {
+      list <- s.obj
+    }
+    list <- merge(x=list, y=s.obj)
+    s.obj<- NULL
+    rm(tmp)
+}
+saveRDS(list, file = "./data/filtered_seuratObjects.rds")
+```
+
+```{r}
+file_list <- list.files("./data/SequencingRuns")
+######################################
+#iterate to make a list of contig csvs
+######################################
+
+
+contig.list <- NULL
+for (i in seq_along(file_list)){
+  contig.list[[i]] <-  read.csv(paste0("./data/SequencingRuns/", file_list[i], "/contig_annotations.csv"))
+}
+names(contig.list) <- file_list
+
+##################################################
+#Reducing the data to the individual barcode level
+##################################################
+combinedObject <- combineTCR(contig.list, samples = file_list, filterMulti = TRUE, removeNA = TRUE, cells = "T-AB")
+combinedObject <- addVariable(combinedObject, name = "Patient", variables = substr(file_list, 1,5))
+list <- combineExpression(combinedObject, list, cloneCall = "aa", groupBy = "Patient")
+saveRDS(list, file = "./data/filtered_seuratObjects.rds")
+```
+
+
+
+
+
+## Selecting Parameters
+
+Going over output from above - it looks like *UMAP30_Neighbors30_resolution0.4* has good dispersion between cell populations and clusters. 
+
+For me, when evaluating the UMAPs - I am looking for clean separations between cell types (we are assuming a lot of different cell types for the purposes of the experimental set up), but also between clusters. The last thing I check during the evaluations is the overlap of different experimental runs - which this version is very good across all clusters.
+
+```{r eval=FALSE}
+integrated <- ScaleData(object = anchors, verbose = FALSE)
+integrated <- RunPCA(object = integrated, npcs = 30, verbose = FALSE)
+integrated <- RunUMAP(object = integrated, reduction = "pca", 
+    dims = 1:30)
+integrated <- FindNeighbors(object = integrated, dims = 1:30, force.recalc = T)
+integrated <- FindClusters(object = integrated, resolution = 0.4, force.recalc=T)
+
+saveRDS(integrated, file = "./data/integratedSeuratObject.rds")
+rm(anchors)
+rm(list)
+
+integrated <- readRDS("./data/integratedSeuratObject.rds")
+```
+
+
+
+
+```{r}
+dir.create("DataAnalysis/")
+dir.create("DataAnalysis/UMAP")
+
+library(viridis)
+update_geom_defaults("point", list(stroke=0.5))
+FeaturePlot(object = integrated, reduction = 'umap', features = "db.weight.score")  + 
+  scale_color_viridis()
+
+ggsave(path = "DataAnalysis/UMAP", filename="db.weighted.score.UMAP_res8.pdf", width=4.75, height=3)
+ggsave(path = "DataAnalysis/UMAP", filename="db.weighted.score.UMAP_res8.eps", width=4.75, height=3)
+
+FeaturePlot(object = integrated, reduction = 'umap', features = "db.ratio")  + 
+  scale_color_viridis()
+
+ggsave(path = "DataAnalysis/UMAP", filename="db.ratio.UMAP_res8.pdf", width=4.75, height=3)
+ggsave(path = "DataAnalysis/UMAP", filename="db.ratio.UMAP_res8.eps", width=4.75, height=3)
+
+DimPlot(object = integrated, reduction = 'umap', group.by = "db.class")  + 
+  scale_color_manual(values = rev(viridis_pal()(2)))
+
+ggsave(path = "DataAnalysis/UMAP", filename="db.class.UMAP_res8.pdf", width=4.75, height=3)
+ggsave(path = "DataAnalysis/UMAP", filename="db.class.UMAP_res8.eps", width=4.75, height=3)
+```
+```{r}
+DimPlot(object = integrated, reduction = 'umap', label = T) + NoLegend()
+ggsave(path = "DataAnalysis/UMAP", filename="Cluster_UMAP_res3.eps", width=3.5, height=3)
+ggsave(path = "DataAnalysis/UMAP", filename="Cluster_UMAP_res3.pdf", width=3.5, height=3)
+```
+
+
+***
+# Identifying subtypes
+
+## Differential Gene Expression
+
+The first step for me is to always look at major markers across clusters, so I will make a folder for differential gene expression (DGE), normalize the *RNA* data, and then use the **FindAllMarkers()** function. This is a generalized function for finding positively expressed genes by cluster (large amount of default filtering will remain intact for now). *Importanly*, RNA data needs to be used over the integrated or sct data as this the former is a reflection of true expression and the latter are values to help with the 2D representation in the UMAP.
+
+```{r eval=FALSE}
+dir.create("DataAnalysis/DGE")
+integrated <- NormalizeData(integrated, assay = "RNA")
+All.markers <- FindAllMarkers(integrated, assay = "RNA", pseudocount.use = 0.1, only.pos = T) 
+write.table(All.markers, file = "./DataAnalysis/DGE/FindAllMarkers_output.txt", col.names=NA, sep="\t",append=F)
+```
+
+
+
+### Hex graphs
+
+I have recently moved away from graphing expression on UMAP projections - there are some issues with the layers of dot's drawn. But I also think it doesn't account for one of the major weaknesses of single-cell RNA-seq - drop out effect. So I have actually started using the r package *schex*.
+
+```{r}
+integrated <- readRDS("data/integratedSeuratObject.rds") #Loading data here
+
+suppressPackageStartupMessages(library(schex))
+integrated <- make_hexbin(integrated, 80, dimension_reduction = "UMAP")
+```
+
+What this package does is calculates the mean, median, or proportion of mRNA expression of an average number of cells in the vicinity. To look at expression distribution, the proportion approach is ideal. We can use that, by calling *action = "prop_0"* in the **plot_hexbin_feature()** call below.
+
+### Top 20 markers per cluster
+
+```{r}
+All.markers <- read.delim("./DataAnalysis/DGE/FindAllMarkers_output.txt")
+top20 <- All.markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_log2FC)
+top20 <- top20$gene #just want the IDs
+
+dir.create("DataAnalysis/UMAP/TopClusterMarkers")
+for (i in seq_along(top20)) {
+    plot <- plot_hexbin_feature(integrated, feature = top20[i], type = "counts", action = "prop_0")+ 
+             guides(fill=F, color = F) + 
+                scale_fill_viridis() 
+        ggsave(path = "DataAnalysis/UMAP/TopClusterMarkers", file = paste0("Top20markers", "_", top20[i], "_prop.pdf"), plot, height=3, width=3.25)
+}
+```
+
+### Lineage Markers Provided in the Dropbox account
+
+#### Loading and organizing the markers
+
+```{r}
+dir.create("DataAnalysis/UMAP/LineageMarkers")
+
+file_list <- list.files("./data/markers.genes")
+file_list <- file_list[grepl(".txt", file_list)]
+files <- file.path(paste0("./data/markers.genes/", file_list))
+
+marker_list <- list()
+for (i in 1:length(files)) {
+    marker_list[[i]] <- read.delim(files[i], col.names = FALSE)
+    for (j in seq_len(nrow(marker_list[[i]]))) {
+      marker_list[[i]][j,] <- toupper( marker_list[[i]][j,])
+    }
+}
+names <- stringr::str_remove(file_list, ".txt")
+names(marker_list) <- names
+```
+
+#### Graphing all the genes
+```{r}
+DefaultAssay(integrated) <- "RNA"
+
+for (i in seq_along(marker_list)) {
+    tmp <- as.character(unlist(marker_list[i]))
+    for (j in seq_along(tmp)) {
+        if (length(which(rownames(integrated@assays$RNA@counts) == tmp[j])) == 0){
+            next() #Need to loop here because plot_hexbin_feature() does not have a built-in function to deal with absence of selected gene
+        } else {
+        plot <- plot_hexbin_feature(integrated, feature = tmp[j], type = "counts", action = "prop_0")+ 
+             guides(fill=F, color = F) + 
+                scale_fill_viridis() 
+        ggsave(path = "DataAnalysis/UMAP/LineageMarkers", file = paste0(names(marker_list)[i], "_", tmp[j], "_prop.pdf"), plot, height=3, width=3.25)
+        }
+    }
+}
+```
+             
+## Singler
+
+Singler is a very cool package: it uses large cohorts of isolated bulk sequencing to correlate with single-cell data and makes ID-ing the cell type really intuitive. It allegedly works with Seurat, but I am not the largest fan of its work, so I have made some customization to help.
+
+As opposed to calculating the signatures across every single cell, the first step is to calculate mean expression by cluster using the **AverageExpression()** function in Seurat. Then we will make an expression matrix and load that into the **CreateSinglerObject()** function.
+
+```{r}
+library(SingleR)
+hpca.se <- HumanPrimaryCellAtlasData()
+
+Average <- AverageExpression(integrated, assay = "RNA", return.seurat = T)
+expr_matrix <- as.matrix(Average@assays$RNA@counts[,names(Average@active.ident)])
+gene_annotation <- data.frame(row.names=rownames(expr_matrix), gene_short_name=rownames(expr_matrix))
+```
+
+
+
+```{r}
+pred.hesc.main <- SingleR(test = expr_matrix, ref = hpca.se, assay.type.test=1,
+    labels = hpca.se$label.main)
+
+pred.hesc.fine <- SingleR(test = expr_matrix, ref = hpca.se, assay.type.test=1,
+    labels = hpca.se$label.fine)
+```
+
+*Warning:* This is not the greatest call function, sometimes when I delete the defaults the function stops working, so some of these seem random, but they're there for sanity
+
+```{r include=FALSE}
+dir.create("DataAnalysis/SingleR")
+
+
+normalize <- function(x)
+{
+    (x- min(x)) /(max(x)-min(x))
+}
+
+matrix <- t(pred.hesc.main$scores)
+for (i in 1:ncol(matrix)) {
+  matrix[,i] <- normalize(matrix[,i])
+}
+colnames(matrix) <- paste0("C", 0:19)
+pdf("DataAnalysis/SingleR/singler.hesc.main.pdf", height = 6, width=6)
+pheatmap::pheatmap(matrix, color = viridis_pal()(100), show_colnames = T)
+dev.off()
+
+
+matrix <- t(pred.hesc.fine$scores)
+
+for (i in 1:ncol(matrix)) {
+  matrix[,i] <- normalize(matrix[,i])
+}
+
+
+colnames(matrix) <- paste0("C", 0:19)
+pdf("DataAnalysis/SingleR/singler.hesc.fine.pdf", height = 16, width=10)
+pheatmap::pheatmap(matrix, color = viridis_pal()(100), show_colnames = T)
+dev.off()
+```
+
+# Adding Immune Receptor Information
+
+
+First let's univeralize the barcode names - there are extra suffixes during the combination of the Seurat objects that I am just going to remove
+```{r}
+contigs <- list.files("./data", pattern = "annotations.csv", recursive = TRUE)
+contig.list <- list()
+for (i in seq_along(contigs)) {
+  contig.list[[i]] <- read.csv(paste0("./data/", contigs[i]))
+}
+
+combined <- combineBCR(contig.list, samples = c("DIAD.506", "DIAD.516", "DIAD.520"), ID = rep("BCR", 3))
+
+saveRDS(combined, "./data/contig_combined.rds")
+combined <- readRDS("./data/contig_combined.rds")
+
+
+#Removing the ID parameter
+for (i in seq_along(combined)) {
+  combined[[i]]$barcode <- gsub("_BCR_", "_", combined[[i]]$barcode)
+}
+
+integrated <- combineExpression(combined, integrated)
+```
+
+```{r}
+DimPlot(integrated, group.by = "cloneType") + 
+  scale_color_manual(values = rev(viridis_pal()(3)), na.value = "grey")
+ggsave(path = "DataAnalysis/UMAP", filename="clonotype.pdf", width=6, height=3)
+ggsave(path = "DataAnalysis/UMAP", filename="clonotype.eps", width=6, height=3)
+```
+
+Let's check our estimates with the ADT assay!!
+
+```{r}
+NormalizeData(integrated, assay = "ADT")
+ScaleData(integrated, assay = "ADT")
+FeaturePlot(integrated, features = integrated@assays$ADT@counts@Dimnames[[1]], cols = viridis_pal()(10)) 
+
+ggsave(path = "DataAnalysis/UMAP", filename="UMAP_ADTassay.eps", width=9, height=8)
+ggsave(path = "DataAnalysis/UMAP", filename="UMAP_ADTassay.pdf", width=9, height=8)
+```
+
+## Final Cell Assignments
+
+```{r}
+celltypes <- readxl::read_xlsx("./data/annot.xlsx")
+meta <- data.frame(integrated[[]],slot(integrated, "active.ident"))
+colnames(meta)[ncol(meta)] <- "active.ident"
+meta$barcode <- rownames(meta)
+
+meta <- merge(meta, celltypes, by.x = "active.ident", by.y = "Cluster")
+rownames(meta) <- meta$barcode
+
+col.name <- names(meta) %||% colnames(meta)
+integrated[[col.name]] <- meta
+
+pal <- ggthemes::tableau_color_pal()
+pal(length(unique(integrated$Major)))
+```
+
+
+```{r}
+DimPlot(object = integrated, reduction = 'umap', group.by = "Major") + 
+    scale_color_manual(values = pal(length(unique(integrated$Major))))
+ggsave(path = "DataAnalysis/UMAP", filename="MajorCellType.UMAP_res8.eps", width=4.5, height=3)
+ggsave(path = "DataAnalysis/UMAP", filename="MajorCellType.UMAP_res8.pdf", width=4.5, height=3)
+
+saveRDS(integrated, file = "./data/integratedSeuratObject.rds")
+```
+
+
+
+********
+
+
+
+
+# Subset the B cells
+
+```{r}
+Bcells <- subset(integrated, Major == "B cell")
+
+Bcells <- SplitObject(Bcells, split.by = "orig.ident")
+options(future.globals.maxSize= 5767168000) #Need this to transfer transformation so increasing from 500 Mb to 5.5 Gb - math: 5500*1024^2 bytes
+
+
+
+for (i in 1:length(list)) {
+    Bcells[[i]] <- NormalizeData(Bcells[[i]], verbose = FALSE, assay = "RNA")
+    Bcells[[i]] <- NormalizeData(Bcells[[i]], verbose = FALSE, assay = "ADT")
+    Bcells[[i]] <- FindVariableFeatures(Bcells[[i]], selection.method = "vst", 
+        nfeatures = 2000, verbose = FALSE, assay = "RNA")
+}
+
+
+anchors <- FindIntegrationAnchors(object.list = Bcells)
+Bcells <- IntegrateData(anchorset = anchors)
+saveRDS(Bcells, "./data/Bcells.rds")
+
+Bcells <- readRDS("./data/Bcells.rds")
+
+Bcells <- NormalizeData(Bcells)
+Bcells <- ScaleData(object = Bcells, verbose = FALSE)
+Bcells <- FindVariableFeatures(Bcells)
+Bcells <- RunPCA(object = Bcells, npcs = 30, verbose = FALSE)
+Bcells <- RunUMAP(object = Bcells, reduction = "pca", 
+    dims = 1:30)
+Bcells<- FindNeighbors(object = Bcells, dims = 1:30, force.recalc = T)
+Bcells <- FindClusters(object = Bcells, resolution = 0.4, force.recalc=T)
+```
+
+```{r}
+dim(Bcells[[]])
+```
+
+
+```{r}
+DimPlot(object = Bcells, reduction = 'umap', label = T) + NoLegend()
+DimPlot(object = Bcells, reduction = 'umap', group.by = "orig.ident")
+
+DimPlot(Bcells, group.by = "cloneType") + 
+  scale_color_manual(values = rev(viridis_pal()(3)), na.value = "grey")
+ggsave(path = "DataAnalysis/UMAP", filename="clonotype.pdf", width=6, height=3)
+ggsave(path = "DataAnalysis/UMAP", filename="clonotype.eps", width=6, height=3)
+```
+
+```{r}
+Bcells <- subset(Bcells, UMAP_2 < 7)
+```
+
+
+
+
+
+
+```{r}
+NormalizeData(Bcells, assay = "ADT")
+ScaleData(Bcells, assay = "ADT")
+FeaturePlot(Bcells, features = Bcells@assays$ADT@counts@Dimnames[[1]], cols = viridis_pal()(10)) 
+
+ggsave(path = "DataAnalysis/UMAP", filename="Bcells_UMAP_ADTassay.eps", width=9, height=8)
+ggsave(path = "DataAnalysis/UMAP", filename="Bcells_UMAP_ADTassay.pdf", width=9, height=8)
+```
+
+```{r}
+DefaultAssay(Bcells) <- "ADT"
+SAV_pos <- subset(Bcells, subset = `SAV-TotalSeqC` >= 6.756922)
+meta <- na.omit(SAV_pos[[]])
+write.csv(meta, file = "./DataAnalysis/SAVpos_Cells.csv")
+```
+
+
+```{r}
+library(seqinr)
+
+fasta <- list.files("./data", recursive = TRUE, pattern = ".fasta")
+
+fasta.list <- list() 
+for (i in seq_along(fasta)) {
+  fasta.list[[i]] <- read.fasta(paste0("./data/", fasta[i]))
+}
+
+orig.ident <- unique(meta$orig.ident)
+barcode.list <- list()
+for (i in seq_along(orig.ident)) {
+  tmp <- meta[meta$orig.ident == orig.ident[i], ]
+  tmp <- tmp$barcode
+  tmp <- stringr::str_split(tmp, "_", simplify = TRUE)[,2]
+  barcode.list[[i]] <- unique(tmp)
+}
+
+for (i in 1:3) { 
+  x <- fasta.list[[i]][grepl(paste0(barcode.list[[i]], collapse = "|"), names(fasta.list[[i]]))]
+  write.fasta(x, names(x), file.out = paste0("./data/filteredContigs_", orig.ident[i], ".fasta"))
+}
+
+```
+
