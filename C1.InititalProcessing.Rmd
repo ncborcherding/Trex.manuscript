@@ -140,6 +140,9 @@ saveRDS(list, file = "./data/filtered_seuratObjects.rds")
 ```
 
 
+```{r}
+list <- readRDS("./data/filtered_seuratObjects.rds")
+```
 
 
 

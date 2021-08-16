@@ -1,0 +1,21 @@
+---
+title: "C2.Analysis"
+author: "Nick Borcherding"
+date: "8/15/2021"
+output: html_document
+---
+
+```{r}
+library(Trex)
+list <- readRDS("./data/filtered_seuratObjects.rds")
+```
+
+```{r}
+list  <- runTrex(list, AA.method = "auto", 
+                    AA.properties = "AF", 
+                    nearest.method = "nn",
+                    near.neighbor = 40,
+                    n.dim = 50,
+                    reduction.name = "Trex.AF")
+```
+
