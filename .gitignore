@@ -1,2 +1,5 @@
 
 data/filtered_seuratObjects.rds
+data/Filteredintegrated_seuratObjects.rds
+data/Fullintegrated_seuratObjects.rds
+data/RNAintegrated_seuratObjects.rds

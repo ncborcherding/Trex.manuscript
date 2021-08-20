@@ -7,11 +7,20 @@ output: html_document
 
 ```{r}
 library(Trex)
-list <- readRDS("./data/filtered_seuratObjects.rds")
+list <- readRDS("./data/Filteredintegrated_seuratObjects.rds")
+
+###############################################################
+#Filter for barcodes with only TCR 
+#This is Built into Trex, just want to save some memory upfront
+################################################################
+cells.chains <- rownames(list[[]][!is.na(list[["cloneType"]]),])
+list <- subset(list, cells = cells.chains)
+
+rm(cells.chains)
 ```
 
 ```{r}
-list  <- runTrex(list, AA.method = "auto", 
+COVID  <- runTrex(list, AA.method = "auto", 
                     AA.properties = "AF", 
                     nearest.method = "nn",
                     near.neighbor = 40,
