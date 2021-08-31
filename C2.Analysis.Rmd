@@ -5,26 +5,217 @@ date: "8/15/2021"
 output: html_document
 ---
 
+# Loading Data and Trex
+
 ```{r}
 library(Trex)
+library(stringr)
+library(stringdist)
+library(amap)
+library(keras)
+
 list <- readRDS("./data/Filteredintegrated_seuratObjects.rds")
 
 ###############################################################
 #Filter for barcodes with only TCR 
-#This is Built into Trex, just want to save some memory upfront
+#This is Built into runTrex(), just want to save some memory upfront
 ################################################################
 cells.chains <- rownames(list[[]][!is.na(list[["cloneType"]]),])
 list <- subset(list, cells = cells.chains)
 
 rm(cells.chains)
+
+source("./R/utils.R")
+source("./R/metrics.R")
+
+
+```
+
+# Running Trex
+
+Here we are using: 
+* Autoencoder model in Trex, specifically for the Atchley factors. 
+* The relationship between sequences being called by nearest neighbor. Which will identify 40 nearest neighbors. If a clonal sequence has more than 40 cells with the TCR, this will automatically randomize the nearest neighbor call within the clonal cells.
+* 50 dimenshions will be returned using the spectral transformation.
+
+
+```{r}
+TCR <- getTCR(list, chains = "both")
+distance.list <- distanceMatrix(TCR, 
+                           edit.method = "lv",
+                           nearest.method = "nn",
+                           near.neighbor = 50,
+                           threshold = NULL, 
+                           n.trim = 0,
+                           c.trim = 0)
+saveRDS(distance.list, file = "distance.edge.rds")
 ```
 
 ```{r}
-COVID  <- runTrex(list, AA.method = "auto", 
+AA.method <- "auto"
+AA.properties <- "AF"
+i <- 1
+membership <- TCR[[i]]
+names <- membership$barcode
+return <- list() ### Need to add reference data
+reference <- Trex.Data[[1]] #AA properties
+col.ref <- grep(tolower(paste(AA.properties, collapse = "|")), colnames(reference))
+column.ref <- unique(sort(col.ref))
+chain <- names(TCR)     
+
+array.reshape <- NULL
+aa.model <- quiet(aa.model.loader(chain[[i]], AA.properties))
+range <- aa.range.loader(chain[[i]], AA.properties, Trex.Data) 
+local.min <- range[[1]]
+local.max <- range[[2]]
+
+ cells <- unique(membership[,"barcode"])
+    for (j in seq_len(length(cells))) {
+      tmp.CDR <- membership[membership$barcode == cells[j],]$cdr3_aa
+      if (AA.method != "auto") {
+        if (c.trim != 0 | n.trim != 0){
+          tmp.CDR <- trim(tmp.CDR, c.trim = c.trim, n.trim = n.trim)
+        }
+        refer <- unlist(strsplit(tmp.CDR, ""))
+        int <- reference[match(refer, reference$aa),]
+        score[j,column.ref] <- colSums(int[,column.ref])/length(refer)
+      } else {
+        refer <- unlist(strsplit(tmp.CDR, ""))
+        refer <- c(refer, rep(NA, 50 - length(refer)))
+        int <- reference[match(refer, reference$aa),c(1,col.ref)]
+        array.reshape.tmp <- array_reshape(as.matrix(int[,-1]), length(col.ref)*50)
+        array.reshape <- rbind(array.reshape, array.reshape.tmp)
+        next()
+      } 
+    }
+      score <- auto.embedder(array.reshape, aa.model, local.max, local.min)
+      score <- data.frame(unique(membership[,"barcode"]), score)
+
+
+saveRDS(score, file = "TRA.aa.edge.rds")
+```
+```{r}
+AA.method <- "auto"
+AA.properties <- "AF"
+i <- 2
+membership <- TCR[[i]]
+names <- membership$barcode
+return <- list() ### Need to add reference data
+reference <- Trex.Data[[1]] #AA properties
+col.ref <- grep(tolower(paste(AA.properties, collapse = "|")), colnames(reference))
+column.ref <- unique(sort(col.ref))
+chain <- names(TCR)     
+
+array.reshape <- NULL
+aa.model <- quiet(aa.model.loader(chain[[i]], AA.properties))
+range <- aa.range.loader(chain[[i]], AA.properties, Trex.Data) 
+local.min <- range[[1]]
+local.max <- range[[2]]
+
+ cells <- unique(membership[,"barcode"])
+    for (j in seq_len(length(cells))) {
+      tmp.CDR <- membership[membership$barcode == cells[j],]$cdr3_aa
+      if (AA.method != "auto") {
+        if (c.trim != 0 | n.trim != 0){
+          tmp.CDR <- trim(tmp.CDR, c.trim = c.trim, n.trim = n.trim)
+        }
+        refer <- unlist(strsplit(tmp.CDR, ""))
+        int <- reference[match(refer, reference$aa),]
+        score[j,column.ref] <- colSums(int[,column.ref])/length(refer)
+      } else {
+        refer <- unlist(strsplit(tmp.CDR, ""))
+        refer <- c(refer, rep(NA, 50 - length(refer)))
+        int <- reference[match(refer, reference$aa),c(1,col.ref)]
+        array.reshape.tmp <- array_reshape(as.matrix(int[,-1]), length(col.ref)*50)
+        array.reshape <- rbind(array.reshape, array.reshape.tmp)
+        next()
+      } 
+    }
+      score <- auto.embedder(array.reshape, aa.model, local.max, local.min)
+      score <- data.frame(unique(membership[,"barcode"]), score)
+
+
+saveRDS(score, file = "TRB.aa.edge.rds")
+```
+
+```{r}
+TCRA.aa <- readRDS("TRA.aa.edge.rds")
+TCRB.aa <- readRDS("TRB.aa.edge.rds")
+list <- list(TCRA.aa, TCRB.aa)
+for (i in seq_along(list)) {
+  score <- list[[i]]
+
+dist <- Dist(score[,seq_len(ncol(score))[-1]], method = "pearson")
+    edge.list <- NULL
+    for (j in seq_len(length(cells))) {
+      row <- SliceExtract_dist(dist,j)
+      max <- max(row, na.rm = TRUE)
+      row <- (max-row)/max
+      if (nearest.method == "threshold") {
+        neighbor <- which(row >= threshold)
+      } else if (nearest.method == "nn") {
+        neighbor <- order(row, decreasing = TRUE)[seq_len(near.neighbor)]
+        neigh.check <- which(row == 1) 
+        if (length(neigh.check) > near.neighbor) {
+          matches <- sample(neigh.check, near.neighbor)
+          neighbor <- matches
+        }
+      }
+      knn.norm = data.frame("from" = j,
+                            "to" = neighbor)
+      edge.list <- rbind(edge.list, knn.norm)
+    }
+    return[[i]] <- edge.list
+    rm(edge.list)
+  }
+  names(return) <- paste0(names(TCR), ".AA")
+  return(return)
+```
+
+
+```{r}
+list  <- runTrex(list, AA.method = "auto", 
                     AA.properties = "AF", 
                     nearest.method = "nn",
                     near.neighbor = 40,
                     n.dim = 50,
                     reduction.name = "Trex.AF")
+saveRDS(list, file = "./data/Filteredintegrated_seuratObjects.rds")
+```
+
+## Examining Trex Dimensions 
+
+One thing I found while building this package was the interesting differences between dimensions - the first several dimensions are clearly influenced by clone, however, as the dimensions increase a more continuous-like relationship emerges.
+
+```{r}
+library(patchwork)
+dims <- list(c(1,2), c(3,4), c(5,6), c(7,8), c(9,10))
+
+for (i in seq_along(dims)) {
+  plot <- DimPlot(list, dims = dims[i], reduction = "Trex.AF", group.by = "CTaa") +
+    scale_color_manual(values = viridis::viridis_pal()(length(unique(list$CTaa)))) + 
+    NoLegend() + 
+    theme_void()
+  assign(plot, paste0("Plot", i))
+}
+
+Plot1 + Plot2 + Plot3 + Plot4 + Plot5
+```
+
+# Comparing the UMAP outputs from ADT vs RNA vs TCR
+
+```{r}
+
+```
+
+## Calculating the multi-modal neighbor 
+
+```{r}
+
+```
+
+# Nearest Neighbor Index between modalities
+```{r}
+
 ```
 
