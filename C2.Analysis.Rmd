@@ -142,10 +142,11 @@ saveRDS(score, file = "TRB.aa.edge.rds")
 TCRA.aa <- readRDS("TRA.aa.edge.rds")
 TCRB.aa <- readRDS("TRB.aa.edge.rds")
 list <- list(TCRA.aa, TCRB.aa)
+return <- list()
 for (i in seq_along(list)) {
   score <- list[[i]]
-
-dist <- Dist(score[,seq_len(ncol(score))[-1]], method = "pearson")
+  cells <- score$unique.membership....barcode...
+  dist <- dist(score[,seq_len(ncol(score))[-1]])
     edge.list <- NULL
     for (j in seq_len(length(cells))) {
       row <- SliceExtract_dist(dist,j)
@@ -167,9 +168,10 @@ dist <- Dist(score[,seq_len(ncol(score))[-1]], method = "pearson")
     }
     return[[i]] <- edge.list
     rm(edge.list)
+    rm(dist)
   }
-  names(return) <- paste0(names(TCR), ".AA")
-  return(return)
+names(return) <- paste0(names(TCR), ".AA")
+saveRDS(return, file = "aa.edge.rds")
 ```
 
 
@@ -189,23 +191,56 @@ One thing I found while building this package was the interesting differences be
 
 ```{r}
 library(patchwork)
-dims <- list(c(1,2), c(3,4), c(5,6), c(7,8), c(9,10))
+dims <- list(c(1,2), c(3,4), c(5,6), c(7,8), c(9,10), c(11,12), c(13,14), c(15,16), c(17,18))
 
 for (i in seq_along(dims)) {
-  plot <- DimPlot(list, dims = dims[i], reduction = "Trex.AF", group.by = "CTaa") +
-    scale_color_manual(values = viridis::viridis_pal()(length(unique(list$CTaa)))) + 
-    NoLegend() + 
-    theme_void()
-  assign(plot, paste0("Plot", i))
+  plot <- DimPlot(list, dims = unlist(dims[i]), reduction = "Trex.AF", group.by = "CTaa") +
+    scale_color_manual(values = viridis::viridis_pal(option = "B")(length(unique(list$CTaa)))) + 
+    guides(color = "none") + 
+    theme_void() + 
+    theme(plot.title = element_blank())
+  assign(paste0("Plot", i), plot)
 }
 
-Plot1 + Plot2 + Plot3 + Plot4 + Plot5
+Plot1 + Plot2 + Plot3 + Plot4 + Plot5 + Plot6 + Plot7 + Plot8  +  plot_layout(ncol = 4)
+ggsave("DimExamination.png", height = 6, width = 12, dpi = 600, bg = "transparent")
+
+DefaultAssay(list) <- 'ADT.integrated'
+VariableFeatures(list) <- rownames(list[["ADT.integrated"]])
+list <- NormalizeData(list, normalization.method = 'CLR', margin = 2) %>% 
+  ScaleData() %>% RunPCA(reduction.name = 'apca')
 ```
 
 # Comparing the UMAP outputs from ADT vs RNA vs TCR
 
 ```{r}
+list <- RunUMAP(list, reduction = 'pca', dims = 1:30, assay = 'integrated', 
+              reduction.name = 'rna.umap', reduction.key = 'rnaUMAP_')
 
+list <- RunUMAP(list, reduction = 'apca', dims = 1:20, assay = 'ADT.integrated', 
+              reduction.name = 'adt.umap', reduction.key = 'adtUMAP_')
+
+list <- RunUMAP(list, reduction = 'Trex.AF', dims = 3:30, 
+              reduction.name = 'Trex.umap', reduction.key = 'trexUMAP_')
+library(RColorBrewer)
+pal <- colorRampPalette(brewer.pal(8, "Set1"))(length(unique(list$Patient)))
+plot10 <- DimPlot(list, reduction = "rna.umap", group.by = "Patient") +
+   guides(color = "none") + 
+  scale_color_manual(values = pal) +
+  theme_void() + 
+  theme(plot.title = element_blank())
+plot11 <- DimPlot(list, reduction = "adt.umap", group.by = "Patient") +
+   guides(color = "none") + 
+  scale_color_manual(values = pal) +
+  theme_void() + 
+  theme(plot.title = element_blank())
+plot12 <- DimPlot(list, reduction = "Trex.umap", group.by = "Patient") +
+   guides(color = "none") + 
+  scale_color_manual(values = pal) +
+  theme_void() + 
+  theme(plot.title = element_blank())
+
+plot10 + plot11 + plot12
 ```
 
 ## Calculating the multi-modal neighbor 
