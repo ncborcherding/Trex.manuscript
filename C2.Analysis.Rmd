@@ -24,11 +24,6 @@ cells.chains <- rownames(list[[]][!is.na(list[["cloneType"]]),])
 list <- subset(list, cells = cells.chains)
 
 rm(cells.chains)
-
-source("./R/utils.R")
-source("./R/metrics.R")
-
-
 ```
 
 # Running Trex
@@ -37,142 +32,6 @@ Here we are using:
 * Autoencoder model in Trex, specifically for the Atchley factors. 
 * The relationship between sequences being called by nearest neighbor. Which will identify 40 nearest neighbors. If a clonal sequence has more than 40 cells with the TCR, this will automatically randomize the nearest neighbor call within the clonal cells.
 * 50 dimenshions will be returned using the spectral transformation.
-
-
-```{r}
-TCR <- getTCR(list, chains = "both")
-distance.list <- distanceMatrix(TCR, 
-                           edit.method = "lv",
-                           nearest.method = "nn",
-                           near.neighbor = 50,
-                           threshold = NULL, 
-                           n.trim = 0,
-                           c.trim = 0)
-saveRDS(distance.list, file = "distance.edge.rds")
-```
-
-```{r}
-AA.method <- "auto"
-AA.properties <- "AF"
-i <- 1
-membership <- TCR[[i]]
-names <- membership$barcode
-return <- list() ### Need to add reference data
-reference <- Trex.Data[[1]] #AA properties
-col.ref <- grep(tolower(paste(AA.properties, collapse = "|")), colnames(reference))
-column.ref <- unique(sort(col.ref))
-chain <- names(TCR)     
-
-array.reshape <- NULL
-aa.model <- quiet(aa.model.loader(chain[[i]], AA.properties))
-range <- aa.range.loader(chain[[i]], AA.properties, Trex.Data) 
-local.min <- range[[1]]
-local.max <- range[[2]]
-
- cells <- unique(membership[,"barcode"])
-    for (j in seq_len(length(cells))) {
-      tmp.CDR <- membership[membership$barcode == cells[j],]$cdr3_aa
-      if (AA.method != "auto") {
-        if (c.trim != 0 | n.trim != 0){
-          tmp.CDR <- trim(tmp.CDR, c.trim = c.trim, n.trim = n.trim)
-        }
-        refer <- unlist(strsplit(tmp.CDR, ""))
-        int <- reference[match(refer, reference$aa),]
-        score[j,column.ref] <- colSums(int[,column.ref])/length(refer)
-      } else {
-        refer <- unlist(strsplit(tmp.CDR, ""))
-        refer <- c(refer, rep(NA, 50 - length(refer)))
-        int <- reference[match(refer, reference$aa),c(1,col.ref)]
-        array.reshape.tmp <- array_reshape(as.matrix(int[,-1]), length(col.ref)*50)
-        array.reshape <- rbind(array.reshape, array.reshape.tmp)
-        next()
-      } 
-    }
-      score <- auto.embedder(array.reshape, aa.model, local.max, local.min)
-      score <- data.frame(unique(membership[,"barcode"]), score)
-
-
-saveRDS(score, file = "TRA.aa.edge.rds")
-```
-```{r}
-AA.method <- "auto"
-AA.properties <- "AF"
-i <- 2
-membership <- TCR[[i]]
-names <- membership$barcode
-return <- list() ### Need to add reference data
-reference <- Trex.Data[[1]] #AA properties
-col.ref <- grep(tolower(paste(AA.properties, collapse = "|")), colnames(reference))
-column.ref <- unique(sort(col.ref))
-chain <- names(TCR)     
-
-array.reshape <- NULL
-aa.model <- quiet(aa.model.loader(chain[[i]], AA.properties))
-range <- aa.range.loader(chain[[i]], AA.properties, Trex.Data) 
-local.min <- range[[1]]
-local.max <- range[[2]]
-
- cells <- unique(membership[,"barcode"])
-    for (j in seq_len(length(cells))) {
-      tmp.CDR <- membership[membership$barcode == cells[j],]$cdr3_aa
-      if (AA.method != "auto") {
-        if (c.trim != 0 | n.trim != 0){
-          tmp.CDR <- trim(tmp.CDR, c.trim = c.trim, n.trim = n.trim)
-        }
-        refer <- unlist(strsplit(tmp.CDR, ""))
-        int <- reference[match(refer, reference$aa),]
-        score[j,column.ref] <- colSums(int[,column.ref])/length(refer)
-      } else {
-        refer <- unlist(strsplit(tmp.CDR, ""))
-        refer <- c(refer, rep(NA, 50 - length(refer)))
-        int <- reference[match(refer, reference$aa),c(1,col.ref)]
-        array.reshape.tmp <- array_reshape(as.matrix(int[,-1]), length(col.ref)*50)
-        array.reshape <- rbind(array.reshape, array.reshape.tmp)
-        next()
-      } 
-    }
-      score <- auto.embedder(array.reshape, aa.model, local.max, local.min)
-      score <- data.frame(unique(membership[,"barcode"]), score)
-
-
-saveRDS(score, file = "TRB.aa.edge.rds")
-```
-
-```{r}
-TCRA.aa <- readRDS("TRA.aa.edge.rds")
-TCRB.aa <- readRDS("TRB.aa.edge.rds")
-list <- list(TCRA.aa, TCRB.aa)
-return <- list()
-for (i in seq_along(list)) {
-  score <- list[[i]]
-  cells <- score$unique.membership....barcode...
-  dist <- dist(score[,seq_len(ncol(score))[-1]])
-    edge.list <- NULL
-    for (j in seq_len(length(cells))) {
-      row <- SliceExtract_dist(dist,j)
-      max <- max(row, na.rm = TRUE)
-      row <- (max-row)/max
-      if (nearest.method == "threshold") {
-        neighbor <- which(row >= threshold)
-      } else if (nearest.method == "nn") {
-        neighbor <- order(row, decreasing = TRUE)[seq_len(near.neighbor)]
-        neigh.check <- which(row == 1) 
-        if (length(neigh.check) > near.neighbor) {
-          matches <- sample(neigh.check, near.neighbor)
-          neighbor <- matches
-        }
-      }
-      knn.norm = data.frame("from" = j,
-                            "to" = neighbor)
-      edge.list <- rbind(edge.list, knn.norm)
-    }
-    return[[i]] <- edge.list
-    rm(edge.list)
-    rm(dist)
-  }
-names(return) <- paste0(names(TCR), ".AA")
-saveRDS(return, file = "aa.edge.rds")
-```
 
 
 ```{r}
@@ -190,6 +49,7 @@ saveRDS(list, file = "./data/Filteredintegrated_seuratObjects.rds")
 One thing I found while building this package was the interesting differences between dimensions - the first several dimensions are clearly influenced by clone, however, as the dimensions increase a more continuous-like relationship emerges.
 
 ```{r}
+dir.create("./output")
 library(patchwork)
 dims <- list(c(1,2), c(3,4), c(5,6), c(7,8), c(9,10), c(11,12), c(13,14), c(15,16), c(17,18))
 
@@ -203,12 +63,7 @@ for (i in seq_along(dims)) {
 }
 
 Plot1 + Plot2 + Plot3 + Plot4 + Plot5 + Plot6 + Plot7 + Plot8  +  plot_layout(ncol = 4)
-ggsave("DimExamination.png", height = 6, width = 12, dpi = 600, bg = "transparent")
-
-DefaultAssay(list) <- 'ADT.integrated'
-VariableFeatures(list) <- rownames(list[["ADT.integrated"]])
-list <- NormalizeData(list, normalization.method = 'CLR', margin = 2) %>% 
-  ScaleData() %>% RunPCA(reduction.name = 'apca')
+ggsave("./output/DimExamination.png", height = 6, width = 12, dpi = 600, bg = "transparent")
 ```
 
 # Comparing the UMAP outputs from ADT vs RNA vs TCR
@@ -220,10 +75,13 @@ list <- RunUMAP(list, reduction = 'pca', dims = 1:30, assay = 'integrated',
 list <- RunUMAP(list, reduction = 'apca', dims = 1:20, assay = 'ADT.integrated', 
               reduction.name = 'adt.umap', reduction.key = 'adtUMAP_')
 
-list <- RunUMAP(list, reduction = 'Trex.AF', dims = 3:30, 
+list <- RunUMAP(list, reduction = 'Trex.AF', dims = 1:50, 
               reduction.name = 'Trex.umap', reduction.key = 'trexUMAP_')
-library(RColorBrewer)
-pal <- colorRampPalette(brewer.pal(8, "Set1"))(length(unique(list$Patient)))
+```
+
+```{r}
+pal <- viridis::viridis_pal(option = "H")(length(unique(list$Patient)))
+
 plot10 <- DimPlot(list, reduction = "rna.umap", group.by = "Patient") +
    guides(color = "none") + 
   scale_color_manual(values = pal) +
@@ -241,16 +99,64 @@ plot12 <- DimPlot(list, reduction = "Trex.umap", group.by = "Patient") +
   theme(plot.title = element_blank())
 
 plot10 + plot11 + plot12
+
+ggsave("./output/UMAPcompare_byPatient.png", height = 3, width = 9, dpi = 600, bg = "transparent")
+
+
+list$cloneType <- factor(list$cloneType, 
+                levels = c("Hyperexpanded (0.1 < X <= 1)", 
+                           "Large (0.01 < X <= 0.1)", 
+                            "Medium (0.001 < X <= 0.01)", 
+                            "Small (1e-04 < X <= 0.001)", 
+                            "Rare (0 < X <= 1e-04)", NA))
+
+plot13 <- DimPlot(list, reduction = "rna.umap", group.by = "cloneType") +
+   guides(color = "none") + 
+  scale_color_manual(values = rev(viridis_pal(option = "B")(5))) +
+  theme_void() + 
+  theme(plot.title = element_blank())
+plot14 <- DimPlot(list, reduction = "adt.umap", group.by = "cloneType") +
+   guides(color = "none") + 
+  scale_color_manual(values = rev(viridis_pal(option = "B")(5))) +
+  theme_void() + 
+  theme(plot.title = element_blank())
+plot15 <- DimPlot(list, reduction = "Trex.umap", group.by = "cloneType") +
+   guides(color = "none") + 
+  scale_color_manual(values = rev(viridis_pal(option = "B")(5))) +
+  theme_void() + 
+  theme(plot.title = element_blank())
+
+plot13 + plot14 + plot15
+ggsave("./output/UMAPcompare_byClonotype.png", height = 3, width = 9, dpi = 600, bg = "transparent")
+```
+
+```{r}
+seuratObj <- RunHarmony(list, "dataset")
+seuratObj <- RunUMAP(seuratObj, reduction = "harmony")
 ```
 
 ## Calculating the multi-modal neighbor 
 
 ```{r}
+list <- FindMultiModalNeighbors(
+  list, reduction.list = list("pca", "apca", "Trex.AF"), 
+  dims.list = list(1:30, 1:20, 1:50), modality.weight.name = "RNA.weight")
+
+list <- RunUMAP(list, nn.name = "weighted.nn", 
+                     reduction.name = "wnn.umap", reduction.key = "wnnUMAP_")
+list <- FindClusters(list, graph.name = "wknn", algorithm = 3, resolution = 0.8, verbose = FALSE)
+
+
+plot16 <- DimPlot(list, reduction = "wnn.umap",  label = TRUE) + NoLegend()
+plot17 <- DimPlot(list, reduction = "wnn.umap", group.by = "CTaa") + scale_color_manual(values = viridis_pal(option = "B")(length(unique(list$CTaa)))) + NoLegend()
+plot18 <- DimPlot(list, group.by = "cloneType", reduction = "wnn.umap") + scale_color_manual(values = rev(viridis_pal(option = "B")(5))) + NoLegend()
+
+group_by()
 
 ```
 
 # Nearest Neighbor Index between modalities
 ```{r}
-
+list <- RunHarmony(list, reduction = "Trex.AF", group.by.vars = c("CTaa", "Patient"))
 ```
 
