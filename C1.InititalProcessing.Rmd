@@ -183,6 +183,150 @@ list <-  list %>%
 saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
 ```
 
+# Initial UMAP and Clustering
+
+```{r}
+list <- readRDS("./data/Fullintegrated_seuratObjects.rds")
+
+list <- FindMultiModalNeighbors(
+  list, reduction.list = list("pca", "apca"), 
+  dims.list = list(1:30, 1:30), modality.weight.name = "RNA.weight"
+)
+
+k <- c(15,20,25,30,35,40,45,50,55,60,65)
+dir.create("./dataExplore/keval")
+out <- NULL
+for(i in k) {
+  myClusterFUN <- function(x, k) {
+      g <- bluster::makeSNNGraph(x, type="jaccard", k = k)
+      igraph::cluster_louvain(g)$membership
+  }
+  
+  pcs <- list@neighbors$weighted.nn@nn.dist
+  originals <- myClusterFUN(pcs, i)
+  
+  set.seed(0010010100)
+  ratios <- bluster::bootstrapStability(pcs, FUN=myClusterFUN, k = i, clusters=originals)
+  dim(ratios)
+  
+  pdf(paste0("./dataExplore/keval/Heatmap_Cluster.stability", i, ".pdf"), height = 3, width = 3.25)
+  pheatmap::pheatmap(ratios, cluster_row=FALSE, cluster_col=FALSE, fontsize = 4,
+      color=viridis::magma(100), breaks=seq(-1, 1, length.out=101))
+  dev.off()
+  summary <- c(i, mean(diag(ratios), na.rm = TRUE), median(diag(ratios), na.rm = TRUE), sd(diag(ratios), na.rm = TRUE))
+  out <- rbind(out, summary)
+}
+colnames(out) <- c("k", "mean", "median", "stdev")
+write.csv(out, "./dataExplore/keval/ClusterPerformance.csv", row.names = FALSE)
+```
+
+
+```{r}
+list <- ref_LCMV_Atlas_mouse_v1.rdsAP(list, 
+                nn.name = "weighted.nn", 
+                reduction.name = "wnn.umap", 
+                reduction.key = "wnnUMAP_", 
+                n.neighbors = 50)
+
+
+res <- k <- c(0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5)
+for (i in seq_along(res)) {
+  list <- FindClusters(list, graph.name = "wsnn", algorithm = 3, resolution = res[i], verbose = FALSE)
+}
+```
+
+Evaluating clustering by resolution using clustree
+
+```{r}
+library(clustree)
+clustree(list, prefix = "wsnn_res.", layout = "sugiyama")
+ggsave("./dataExplore/ClusterTree_resolution.pdf", height = 12, width = 12)
+
+clustree(list, prefix = "wsnn_res.", layout = "sugiyama", node_colour = "sc3_stability")
+ggsave("./dataExplore/ClusterTree_stability.pdf", height = 12, width = 12)
+```
+Selecting the resolution of 0.8 based on the clustree results. 
+
+```{r}
+list@meta.data$seurat_clusters <- list@meta.data$wsnn_res.0.8
+list@meta.data <- list@meta.data[,-grep("wsnn_res", colnames(list[[]]))]
+Idents(list) <- "seurat_clusters"
+DimPlot(list, label = TRUE) + NoLegend()
+saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
+```
+
+
+#ProjecTIL annotation using the LCMV CD4 and CD8 data sets
+
+```{r}
+library(ProjecTILs)
+list <- SplitObject(list, split.by = "orig.ident")
+ref <- load.reference.map("./data/Annotation/ref_LCMV_CD4_mouse_release_v1.rds")
+query.projected <- make.projection(list, ref = ref, ncores = 1, human.ortho = TRUE)
+
+#Lapply across list of Seurat objects
+query.projected <- lapply(query.projected, function(x) {
+    cellstate.predict(ref = ref, query = x, reduction = "umap", ndim = 2)
+})
+
+CD4.annotation <- NULL
+#Loop for the meta data
+for (i in seq_along(query.projected)) {
+  meta <- query.projected[[i]][[c("functional.cluster", "functional.cluster.conf")]]
+  colnames(meta) <- c("CD4.annot", "CD4.score")
+  rownames(meta) <- stringr::str_remove(rownames(meta), "Q_")
+  CD4.annotation <- rbind(CD4.annotation, meta)
+}
+saveRDS(CD4.annotation,"./data/Annotation/CD4.annotation.rds")
+rm(CD4.annotation)
+rm(query.projected)
+
+
+ref <- load.reference.map("./data/Annotation/ref_LCMV_Atlas_mouse_v1.rds")
+query.projected <- make.projection(list, ref = ref, ncores = 1, human.ortho = TRUE)
+
+#Lapply across list of Seurat objects
+query.projected <- lapply(query.projected, function(x) {
+    cellstate.predict(ref = ref, query = x, reduction = "umap", ndim = 2)
+})
+
+CD8.annotation <- NULL
+#Loop for the meta data
+for (i in seq_along(query.projected)) {
+  meta <- query.projected[[i]][[c("functional.cluster", "functional.cluster.conf")]]
+  colnames(meta) <- c("CD8.annot", "CD8.score")
+  rownames(meta) <- stringr::str_remove(rownames(meta), "Q_")
+  CD8.annotation <- rbind(CD8.annotation, meta)
+}
+saveRDS(CD8.annotation,"./data/Annotation/CD8.annotation.rds")
+rm(CD8.annotation)
+rm(query.projected)
+
+```
+
+## SingleR annotation using the DICE data set
+```{r}
+library(SingleR)
+library(Matrix)
+DICE.annotation <- NULL
+for (i in seq_along(list)) {
+  tmp <- list[[i]]
+  tmp.2 <- tmp@assays[["RNA"]]@counts
+  ####This approach for matrix conversion saves some memory
+  tmp.2 <- tmp.2[tabulate(summary(tmp.2)$i) != 0, , drop = FALSE]
+  tmp.2 <- as.matrix(tmp.2)
+  com.res2 <- SingleR(tmp.2, ref=DICE, labels=DICE$label.fine, assay.type.test=1)
+  df <- data.frame("DICE.first.labels" = com.res2$first.labels, "DICE.labels" = com.res2$labels, "DICE.pruned.labels" = com.res2$pruned.labels)
+  DICE.annotation <- rbind(DICE.annotation, df)
+}
+```
+
+
+
+
+# Annotation of Clusters
+
+# Adding contig data to the Seurat object
 ```{r}
 library(scRepertoire)
 file_list <- list.files("./data/SequencingRuns", pattern = "Sar")
@@ -205,6 +349,7 @@ combinedObject <- addVariable(combinedObject, name = "Patient", variables = subs
 list <- combineExpression(combinedObject, list, cloneCall = "aa", groupBy = "Patient")
 saveRDS(list, file = "./data/Filteredintegrated_seuratObjects.rds")
 ```
+
 
 
 
