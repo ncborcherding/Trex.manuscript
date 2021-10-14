@@ -416,8 +416,57 @@ Idents(list) <- "seurat_clusters"
 
 Idents(list) <- factor(Idents(list), levels = paste0("C", 1:33))
 
-DimPlot(list, label = TRUE) + NoLegend()
+DimPlot(list, label = TRUE)  + scale_color_manual(values = viridis_pal(option = "H")(length(unique(list$seurat_clusters)))) + NoLegend()
 saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
+```
+# Graphing canonical marker genes
+
+```{r}
+dir.create("./output/LineageMarkers")
+file_list <- list.files("./data/markers.genes")
+file_list <- file_list[grepl(".txt", file_list)]
+files <- file.path(paste0("./data/markers.genes/", file_list))
+marker_list <- list()
+for (i in 1:length(files)) {
+    marker_list[[i]] <- read.delim(paste0(files[i]), col.names = FALSE)
+    for (j in seq_len(nrow(marker_list[[i]]))) {
+      marker_list[[i]][j,] <- toupper( marker_list[[i]][j,])
+    }
+}
+names <- stringr::str_remove(file_list, ".txt")
+names(marker_list) <- names
+
+suppressPackageStartupMessages(library(schex))
+list <- make_hexbin(list, 128, dimension_reduction = "wnn.umap")
+DefaultAssay(list) <- "RNA"
+
+dir.create("./output/LineageMarkers")
+for (i in seq_along(marker_list)) {
+    tmp <- as.character(unlist(marker_list[i]))
+    for (j in seq_along(tmp)) {
+        if (length(which(rownames(list@assays$RNA@counts) == tmp[j])) == 0){
+            next() #Need to loop here because plot_hexbin_feature() does not have a built-in function to deal with absence of selected gene
+        } else {
+        plot <- plot_hexbin_feature(list, feature = tmp[j], type = "counts", action = "prop_0")+ 
+             guides(fill="none", color = "none") + 
+                scale_fill_viridis(option = "B") 
+        ggsave(path = "./output/LineageMarkers", file = paste0(names(marker_list)[i], "_", tmp[j], "_prop.pdf"), plot, height=3, width=3.25)
+        }
+    }
+}
+
+DefaultAssay(list) <- "ADT"
+tmp <- rownames(list@assays$ADT@counts)
+
+for (j in seq_along(tmp)) {
+        plot <- plot_hexbin_feature(list, feature = tmp[j], type = "data", mod = "ADT", action = "median")+ 
+             guides(fill="none", color = "none") + 
+                scale_fill_viridis(option = "B") 
+        ggsave(path = "./output/LineageMarkers", file = paste0(tmp[j], "_prop.pdf"), plot, height=3, width=3.25)
+        }
+    
+
+
 ```
 
 
