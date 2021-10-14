@@ -255,12 +255,19 @@ DimPlot(list, label = TRUE) + NoLegend()
 saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
 ```
 
+# Cell Annotation
 
-#ProjecTIL annotation using the LCMV CD4 and CD8 data sets
+## ProjecTIL annotation using the LCMV CD4 and CD8 data sets
 
 ```{r}
 library(ProjecTILs)
+list <- readRDS("./data/Fullintegrated_seuratObjects.rds")
 list <- SplitObject(list, split.by = "orig.ident")
+
+###########################
+#CD4 LCMV Annotation
+############################
+
 ref <- load.reference.map("./data/Annotation/ref_LCMV_CD4_mouse_release_v1.rds")
 query.projected <- make.projection(list, ref = ref, ncores = 1, human.ortho = TRUE)
 
@@ -281,6 +288,9 @@ saveRDS(CD4.annotation,"./data/Annotation/CD4.annotation.rds")
 rm(CD4.annotation)
 rm(query.projected)
 
+###########################
+#CD8 LCMV Annotation
+############################
 
 ref <- load.reference.map("./data/Annotation/ref_LCMV_Atlas_mouse_v1.rds")
 query.projected <- make.projection(list, ref = ref, ncores = 1, human.ortho = TRUE)
@@ -301,13 +311,13 @@ for (i in seq_along(query.projected)) {
 saveRDS(CD8.annotation,"./data/Annotation/CD8.annotation.rds")
 rm(CD8.annotation)
 rm(query.projected)
-
 ```
 
 ## SingleR annotation using the DICE data set
 ```{r}
 library(SingleR)
 library(Matrix)
+DICE <- DatabaseImmuneCellExpressionData()
 DICE.annotation <- NULL
 for (i in seq_along(list)) {
   tmp <- list[[i]]
@@ -317,16 +327,40 @@ for (i in seq_along(list)) {
   tmp.2 <- as.matrix(tmp.2)
   com.res2 <- SingleR(tmp.2, ref=DICE, labels=DICE$label.fine, assay.type.test=1)
   df <- data.frame("DICE.first.labels" = com.res2$first.labels, "DICE.labels" = com.res2$labels, "DICE.pruned.labels" = com.res2$pruned.labels)
+  rownames(df) <- rownames(tmp[[]])
   DICE.annotation <- rbind(DICE.annotation, df)
 }
+saveRDS(DICE.annotation,"./data/Annotation/DICE.annotation.rds")
 ```
 
+## Consensus Annotation 
 
+Quickly adding the labeled results from each pipeline. 
 
+```{r}
+CD4 <- readRDS("./data/Annotation/CD4.annotation.rds")
+CD8 <- readRDS("./data/Annotation/CD8.annotation.rds")
+DICE <- readRDS("./data/Annotation/DICE.annotation.rds")
 
-# Annotation of Clusters
+annot <- merge(CD4, CD8, by = 0, all = TRUE)
+annot <- merge(annot, DICE, by.x = "Row.names", by.y = 0, all = TRUE)
+cells <- annot$Row.names
+annot <- annot[,-1]
+rownames(annot) <- cells
 
-# Adding contig data to the Seurat object
+list <- readRDS("./data/Fullintegrated_seuratObjects.rds")
+list <- AddMetaData(list, annot)
+saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
+
+library(viridis)
+DimPlot(list, group.by = "CD4.annot") + scale_color_manual(values = viridis_pal(option = "H")(length(unique(list$CD4.annot))))
+
+DimPlot(list, group.by = "CD8.annot") + scale_color_manual(values = viridis_pal(option = "H")(length(unique(list$CD8.annot))))
+
+DimPlot(list, group.by = "DICE.pruned.labels") + scale_color_manual(values = viridis_pal(option = "H")(length(unique(list$DICE.pruned.labels))))
+```
+
+## Adding contig data to the Seurat object
 ```{r}
 library(scRepertoire)
 file_list <- list.files("./data/SequencingRuns", pattern = "Sar")
@@ -346,11 +380,44 @@ names(contig.list) <- file_list
 ##################################################
 combinedObject <- combineTCR(contig.list, samples = file_list, filterMulti = TRUE, removeNA = TRUE, cells = "T-AB")
 combinedObject <- addVariable(combinedObject, name = "Patient", variables = substr(file_list, 1,5))
-list <- combineExpression(combinedObject, list, cloneCall = "aa", groupBy = "Patient")
-saveRDS(list, file = "./data/Filteredintegrated_seuratObjects.rds")
+list <- combineExpression(combinedObject, list, cloneCall = "aa", group.by = "Patient")
+
+slot(list, "meta.data")$cloneType <- factor(slot(list, "meta.data")$cloneType, 
+                levels = c("Hyperexpanded (0.1 < X <= 1)", 
+                           "Large (0.01 < X <= 0.1)", 
+                            "Medium (0.001 < X <= 0.01)", 
+                            "Small (1e-04 < X <= 0.001)", 
+                            "Rare (0 < X <= 1e-04)", NA))
+
+DimPlot(list, group.by = "cloneType") + scale_color_manual(values = rev(viridis_pal(option = "B")(length(unique(list$cloneType)))))
+
+saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
 ```
 
 
+## Consensus Clustering
 
+```{r}
+meta <- list[[]]
+
+table(list$CD4.annot, list$seurat_clusters, useNA = "ifany")
+```
+
+# Simplify Clusters 
+
+There are 11 clusters with 2 or less cells - the following removes them and renumbers the clustering 
+
+```{r}
+list <- subset(list, idents = names(which(table(list$seurat_clusters) > 10)))
+
+list$seurat_clusters <- droplevels(list$seurat_clusters)
+list$seurat_clusters <- paste0("C", as.numeric(list$seurat_clusters))
+Idents(list) <- "seurat_clusters"
+
+Idents(list) <- factor(Idents(list), levels = paste0("C", 1:33))
+
+DimPlot(list, label = TRUE) + NoLegend()
+saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
+```
 
 
