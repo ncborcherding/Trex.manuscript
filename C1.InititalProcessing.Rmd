@@ -395,15 +395,9 @@ saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
 ```
 
 
-## Consensus Clustering
 
-```{r}
-meta <- list[[]]
 
-table(list$CD4.annot, list$seurat_clusters, useNA = "ifany")
-```
-
-# Simplify Clusters 
+## Simplify Clusters 
 
 There are 11 clusters with 2 or less cells - the following removes them and renumbers the clustering 
 
@@ -416,10 +410,11 @@ Idents(list) <- "seurat_clusters"
 
 Idents(list) <- factor(Idents(list), levels = paste0("C", 1:33))
 
-DimPlot(list, label = TRUE)  + scale_color_manual(values = viridis_pal(option = "H")(length(unique(list$seurat_clusters)))) + NoLegend()
+DimPlot(list, label = TRUE)  + scale_color_manual(values = viridis_pal(option = "H")(length(unique(list$seurat_clusters)))) + theme_void() + NoLegend() 
+ggsave("UMAP_clusters.png", dpi = 600, height = 3.5, width = 3.5)
 saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
 ```
-# Graphing canonical marker genes
+## Graphing canonical marker genes
 
 ```{r}
 dir.create("./output/LineageMarkers")
@@ -464,9 +459,339 @@ for (j in seq_along(tmp)) {
                 scale_fill_viridis(option = "B") 
         ggsave(path = "./output/LineageMarkers", file = paste0(tmp[j], "_prop.pdf"), plot, height=3, width=3.25)
         }
-    
+```
+
+## Consensus Clustering
+```{r}
+list <- readRDS("./data/Fullintegrated_seuratObjects.rds")
+
+DefaultAssay(list) <- "ADT"
+FeaturePlot(list, features = "CD8-TotalSeqC") + 
+  scale_color_viridis(option = "B")
+
+hist(list@assays$ADT@data["CD8-TotalSeqC",], breaks = 100)
+
+list@meta.data$CD8.ADT <- ifelse(list@assays$ADT@data["CD8-TotalSeqC",] >=  1.25, "Yes", "No")
+list@meta.data$CD4.annot.mod <- list@meta.data$CD4.annot
+list@meta.data$CD4.annot.mod <- ifelse(list@meta.data$CD8.ADT == "Yes", NA, list@meta.data$CD4.annot.mod)
+list@meta.data$CD8.annot.mod <- list@meta.data$CD8.annot
+list@meta.data$CD8.annot.mod <- ifelse(list@meta.data$CD8.ADT == "No", NA, list@meta.data$CD8.annot.mod)
+```
+
+```{r}
+df <- as.data.frame(list@reductions$wnn.umap@cell.embeddings)
+meta <- list[[]]
+
+xmin <- round(min(df$wnnUMAP_1)-1)
+xmax <- round(max(df$wnnUMAP_1)+1)
+
+ymin <- round(min(df$wnnUMAP_2)-1)
+ymax <- round(max(df$wnnUMAP_2)+1)
+
+basePlot <- ggplot(df, aes(x = wnnUMAP_1, y = wnnUMAP_2)) + 
+  geom_point(col = "grey", stroke = 0) + 
+  theme_void() + 
+  xlim(xmin, xmax) + 
+  ylim(ymin, ymax)
+
+types <- sort(unique(list$CD4.annot.mod))
+for (i in seq_along(types)) {
+  tmp <- which(meta$CD4.annot.mod == types[i])
+  plot <- basePlot + 
+    stat_density_2d(df[tmp,], mapping = aes(x = wnnUMAP_1, 
+                              y = wnnUMAP_2, fill = stat(level)),
+                        geom = "polygon", 
+                    bins = 20) + 
+    theme_void() + 
+    scale_fill_viridis(option = "B") + 
+    guides(fill = "none")  + 
+    ggtitle(types[i])
+  assign(types[i], plot)
+}
+
+library(patchwork) 
+#paste(types, collapse = "+")
+Eomes_HI+INFI_stimulated+Tcm+Tcmp+Tfh_Effector+Tfh_Memory+Th1_Effector+Th1_Memory+Treg
+ggsave("CD4.ProjecTIL.annotation.mod.png", height = 9, width = 10, dpi = 600)
+
+types <- sort(unique(list$CD8.annot.mod))
+for (i in seq_along(types)) {
+  tmp <- which(meta$CD8.annot.mod == types[i])
+  plot <- basePlot + 
+    stat_density_2d(df[tmp,], mapping = aes(x = wnnUMAP_1, 
+                              y = wnnUMAP_2, fill = stat(level)),
+                        geom = "polygon", 
+                    bins = 20) + 
+    theme_void() + 
+    scale_fill_viridis(option = "B") + 
+    guides(fill = "none")  + 
+    ggtitle(types[i])
+  assign(types[i], plot)
+}
+
+#paste(types, collapse = "+")
+`Eff Cycling`+`Eff Early`+`Eff Interm`+`Memory Prec`+SLEC+Tex+Tpex
+ggsave("CD8.ProjecTIL.annotation.mod.png", height = 9, width = 10, dpi = 600)
+
+types <- sort(unique(list$DICE.pruned.labels))
+names <- stringr::str_remove_all(types, " ")
+names <- stringr::str_remove_all(names, "[+]")
+names <- stringr::str_replace_all(names, ",", ".")
+for (i in seq_along(types)) {
+  tmp <- which(meta$DICE.labels == types[i])
+  plot <- basePlot + 
+    stat_density_2d(df[tmp,], mapping = aes(x = wnnUMAP_1, 
+                              y = wnnUMAP_2, fill = stat(level)),
+                        geom = "polygon", 
+                    bins = 20) + 
+    theme_void() + 
+    scale_fill_viridis(option = "B") + 
+    guides(fill = "none")  + 
+    ggtitle(types[i])
+  assign(names[i], plot)
+}
+
+paste(names, collapse = "+")
+Bcells.naive+Monocytes.CD14+Monocytes.CD16+NKcells+Tcells.CD4.memoryTREG+Tcells.CD4.naive+Tcells.CD4.naiveTREG+Tcells.CD4.naive.stimulated+Tcells.CD4.TFH+Tcells.CD4.Th1+Tcells.CD4.Th1_17+Tcells.CD4.Th17+Tcells.CD4.Th2+Tcells.CD8.naive+Tcells.CD8.naive.stimulated + plot_layout(ncol = 3)
+ggsave("DICE.annotation.png", height = 15, width = 10, dpi = 600)
+```
+
+
+```{r}
+meta <- list[[]]
+
+tissue <- table(list$Tissue, list$seurat_clusters, useNA = "ifany")
+for (i in 1:2) {
+  tissue[i,] <- tissue[i,]/sum(tissue[i,])
+}
+tissue <- as.data.frame(tissue)
+tissue$Var2 <- factor(tissue$Var2, levels = paste0("C", 1:33))
+ggplot(tissue, aes(x = Var2, fill = Var1, y = Freq)) + 
+  geom_bar(stat = "identity", position = "fill") + 
+  geom_hline(yintercept = 0.5) + 
+  geom_hline(yintercept = c(0.4, 0.6), lty = 2) + 
+  coord_flip() +
+  theme_classic() + 
+  scale_fill_manual(values = rev(viridis_pal(option = "F")(4)))
+
+
+CD4.annot <- table(list$CD4.annot.mod, list$seurat_clusters, useNA = "ifany")
+for (i in seq_len(nrow(CD4.annot))) {
+  CD4.annot[,i] <- CD4.annot[,i]/sum(CD4.annot[,i])
+}
+CD4.annot <- as.data.frame(CD4.annot)
+CD4.annot$Var2 <- factor(CD4.annot$Var2, levels = paste0("C", 1:33))
+
+ggplot(CD4.annot, aes(x = Var2, fill = Var1, y = Freq)) + 
+  geom_bar(stat = "identity", position = "fill") + 
+  geom_hline(yintercept = 0.5) + 
+  geom_hline(yintercept = c(0.4, 0.6), lty = 2) + 
+  coord_flip() +
+  theme_classic() +
+  labs(fill = "CellType") + 
+  scale_fill_manual(values = rev(viridis_pal(option = "H")(length(unique(CD4.annot$Var1)))))+ 
+  theme(axis.title = element_blank())
+ggsave("CD4.mod.distribution.pdf", height = 4, width = 5)
+
+
+CD8.annot <- table(list$CD8.annot.mod, list$seurat_clusters, useNA = "ifany")
+for (i in seq_len(nrow(CD8.annot))) {
+  CD8.annot[,i] <- CD8.annot[,i]/sum(CD8.annot[,i])
+}
+CD8.annot <- as.data.frame(CD8.annot)
+CD8.annot$Var2 <- factor(CD8.annot$Var2, levels = paste0("C", 1:33))
+
+ggplot(CD8.annot, aes(x = Var2, fill = Var1, y = Freq)) + 
+  geom_bar(stat = "identity", position = "fill") + 
+  geom_hline(yintercept = 0.5) + 
+  geom_hline(yintercept = c(0.4, 0.6), lty = 2) + 
+  coord_flip() +
+  theme_classic() +
+  labs(fill = "CellType") + 
+  scale_fill_manual(values = rev(viridis_pal(option = "H")(length(unique(CD8.annot$Var1)))))+ 
+  theme(axis.title = element_blank())
+ggsave("CD8.mod.distribution.pdf", height = 4, width = 5)
+```
+
+
+## ImmunoMind Annotation
+
+```{r}
+Helper <- readxl::read_xlsx("./data/Annotation/ImmunoMind/IM_helper.xlsx")
+names <- Helper$Marker
+Helper <- as.data.frame(Helper[,-1])
+rownames(Helper) <- names
+
+Major <- readxl::read_xlsx("./data/Annotation/ImmunoMind/IM_major.xlsx")
+names <- Major$Marker
+Major <- as.data.frame(Major[,-1])
+rownames(Major) <- names
+
+```
+
+
+```{r}
+DefaultAssay(list) <- "RNA"
+markers <- FindAllMarkers(list)
+write.csv(markers, "FindAllMarkers.csv")
+markers <- read.csv("FindAllMarkers.csv")
+
+unwanted_genes <- "TRBV*|^TRBD*|^TRBJ*|^TRDV*|^TRDD*|^TRDJ*|^TRAV*|^TRAJ*|^TRGV*|^TRGJ*|^MT-*|^RPS*|^RPL*"
+markers2 <- markers[!grepl(pattern = unwanted_genes, x = markers$gene),]
+
+top50 <- markers2 %>%
+  group_by(cluster) %>%
+  top_n(50, avg_log2FC)
+```
+
+```{r}
+annotation <- Helper
+markers <- top50
+
+#sc is the single-cell object, right now it is formated only for Seurat
+#markers is the filter top x output from FindMarkers
+#annotation is the annotation file provided in excel
+IM.score <- function(sc, markers, annotation) {
+  annotation.list <- list()
+  #make FindMarker object into list
+  marker.list <- split(markers, markers[,"cluster"])
+  #Make annotation lists for each subtype
+  for (x in seq_len(ncol(annotation))) { 
+    full <- rownames(annotation)[which(annotation[,x] == 1)]
+    half <- rownames(annotation)[which(annotation[,x] == 0.5)]
+    tmp <- list(full, half)
+    annotation.list[[x]] <- tmp
+  }
+  names(annotation.list) <- colnames(annotation)
+  score.matrix <- matrix(nrow = length(marker.list), ncol = length(annotation.list), 0)
+  #Loop through the annotation scoring 
+  #Score is scaled by the total number of genes in the annotated cell type that is expressed in the count data
+  for (y in seq_along(marker.list)) {
+    for(z in seq_along(annotation.list)) {
+      full.denominator <- rownames(sc@assays$RNA@counts)[rownames(sc@assays$RNA@counts) %in% annotation.list[[z]][[1]]]
+      if(length(full.denominator) == 0) {
+        full.denominator <- 1
+      }
+      half.denominator <- rownames(sc@assays$RNA@counts)[rownames(sc@assays$RNA@counts) %in% annotation.list[[z]][[2]]]
+      if(length(half.denominator) == 0) {
+        half.denominator <- 1
+      }
+      full.score <- length(which(marker.list[[y]]$gene %in% annotation.list[[z]][[1]]))/length(full.denominator)
+      half.score <- length(which(marker.list[[y]]$gene %in% annotation.list[[z]][[2]]))/length(half.denominator)
+      total.score <- full.score + half.score/2
+      score.matrix[y,z] <- total.score
+    }
+  }
+  colnames(score.matrix) <- names(annotation.list)
+  rownames(score.matrix) <- names(marker.list)
+  return(score.matrix)
+}
+
+scores.major <- IM.score(list,top50, Major)
+pheatmap::pheatmap(scores.major, cluster_rows = FALSE, color = viridis_pal()(50))
+
+scores.helper <- IM.score(list,top50, Helper)
+pheatmap::pheatmap(scores.helper, cluster_rows = FALSE, color = viridis_pal()(50))
+```
+
+
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(Trex)
+list <- readRDS("./data/Fullintegrated_seuratObjects.rds")
+cells.chains <- rownames(list[[]][!is.na(list[["cloneType"]]),])
+Tcells <- subset(list, cells = cells.chains)
+
+cells.chains <- rownames(Tcells[[]][!is.na(Tcells[["CD4.annot"]]),])
+Tcells <- subset(Tcells, cells = cells.chains)
+
+Tcells <- DietSeurat(Tcells, assays = c("RNA", "ADT"))
+DefaultAssay(Tcells) <- "RNA"
+list <- SplitObject(Tcells, "orig.ident")
+
+#############################################################
+#Calculating Variable Genes and Removing TCR-related genes
+############################################################
+list <- lapply(X = list, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+    x <- quietTCRgenes(x)
+})
+
+  
+#####################
+#Integrating RNA
+###################
+
+# select features that are repeatedly variable across datasets for integration
+features <- SelectIntegrationFeatures(object.list = list)
+
+immune.anchors <- FindIntegrationAnchors(object.list = list, anchor.features = features)
+# this command creates an 'integrated' data assay
+immune.combined <- IntegrateData(anchorset = immune.anchors)
+immune.combined <- ScaleData(immune.combined, verbose = FALSE)
+immune.combined <- RunPCA(immune.combined, npcs = 30, verbose = FALSE)
+
+saveRDS(immune.combined, file = "./data/RNAintegrated_Tcell_seuratObjects.rds")
+rm(features)
+rm(immune.anchors)
+rm(immune.combined)
+
+DefaultAssay(list[[1]])
+############################
+#Integrating ADT
+############################
+DefaultAssay(Tcells) <- "ADT"
+list <- SplitObject(Tcells, "orig.ident")
+features <- rownames(list[[1]][["ADT"]])
+
+list <- lapply(X = list, FUN = function(x) {
+    DefaultAssay(x) <- "ADT"
+    x <- ScaleData(x, features = features, verbose = FALSE)
+    x <- RunPCA(x, features = features, verbose = FALSE)
+})
+
+ADT.anchors <- FindIntegrationAnchors(object.list = list, reference = c(1, 2), reduction = "rpca", 
+    dims = 1:30, assay = rep("ADT", 14), anchor.features = 37)
+ADT.integrated <- IntegrateData(anchorset = ADT.anchors, dims = 1:30)
+ADT <- ADT.integrated@assays$integrated
+rm(ADT.anchors)
+rm(ADT.integrated)
+
+############################
+#Combining all to single object
+############################
+list <- readRDS("./data/RNAintegrated_Tcell_seuratObjects.rds")
+list[["ADT.integrated"]] <- ADT
+
+DefaultAssay(list) <- 'ADT.integrated'
+VariableFeatures(list) <- rownames(list[["ADT.integrated"]])
+list <-  list %>% 
+  ScaleData() %>% RunPCA(reduction.name = 'apca')
+
+saveRDS(list, file = "./data/Fullintegrated_Tcell_seuratObjects.rds")
+
+```
+
+```{r}
+list <- readRDS("./data/Fullintegrated_Tcell_seuratObjects.rds")
+
+RNA.neighbors <- FindNeighbors(list@reductions$pca@cell.embeddings, 
+                               annoy.metric = "cosine", 
+                               k.param = 30)
+saveRDS(RNA.neighbors, "RNA.neighbors.rds")
+ADT.neighbors <- FindNeighbors(list@reductions$apca@cell.embeddings, 
+                               annoy.metric = "cosine", 
+                               k.param = 30)
+saveRDS(ADT.neighbors, "ADT.neighbors.rds")
+
+meta <- list[[]]
+saveRDS(meta, "Tcell.meta.rds")
 
 
 ```
+
 
 
