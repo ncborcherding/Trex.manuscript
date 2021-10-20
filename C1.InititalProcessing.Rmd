@@ -789,8 +789,28 @@ saveRDS(ADT.neighbors, "ADT.neighbors.rds")
 
 meta <- list[[]]
 saveRDS(meta, "Tcell.meta.rds")
+```
 
 
+```{r}
+list <- readRDS("./data/Fullintegrated_Tcell_seuratObjects.rds")
+ADT.neighbors <- readRDS("ADT.neighbors.rds")
+RNA.neighbors <- readRDS("RNA.neighbors.rds")
+
+graph.names <- paste0("RNA_", names(RNA.neighbors))
+for(i in seq_len(length(graph.names))) {
+          suppressWarnings(list[[graph.names[i]]] <- RNA.neighbors[[i]])
+}
+
+graph.names <- paste0("ADT_", names(RNA.neighbors))
+for(i in seq_len(length(graph.names))) {
+          suppressWarnings(list[[graph.names[i]]] <- ADT.neighbors[[i]])
+}
+
+x <- Seurat:::FindModalityWeights(object = list, 
+                reduction.list = c("pca", "apca"),
+                dims.list = list(1:30,1:30),
+                k.nn = 30)
 ```
 
 
