@@ -7,3 +7,5 @@ data/Annotation/ref_LCMV_CD4_mouse_release_v1.rds
 data/Annotation/ref_LCMV_Atlas_mouse_v1.rds
 data/Fullintegrated_Tcell_seuratObjects.rds
 data/RNAintegrated_Tcell_seuratObjects.rds
+*.rds
+*.gz

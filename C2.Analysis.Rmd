@@ -1,162 +1,361 @@
 ---
-title: "C2.Analysis"
-author: "Nick Borcherding"
-date: "8/15/2021"
-output: html_document
+title: "C2: Applying Trex across cohorts"
+author: 
+- name: Nick Borcherding
+  email: ncborch@gmail.com
+  affiliation: Washington University in St. Louis, School of Medicine, St. Louis, MO, USA
+date: "January 10, 2022"
+output:
+  BiocStyle::html_document:
+    toc_float: true
 ---
+
+In reference to the manuscript, this analysis centers of Figure 2 and 3
+
 
 # Loading Data and Trex
 
-```{r}
-library(Trex)
-library(stringr)
-library(stringdist)
-library(amap)
-library(keras)
-
-list <- readRDS("./data/Filteredintegrated_seuratObjects.rds")
-
-###############################################################
-#Filter for barcodes with only TCR 
-#This is Built into runTrex(), just want to save some memory upfront
-################################################################
-cells.chains <- rownames(list[[]][!is.na(list[["cloneType"]]),])
-list <- subset(list, cells = cells.chains)
-
-rm(cells.chains)
-```
-
-# Running Trex
-
 Here we are using: 
-* Autoencoder model in Trex, specifically for the Atchley factors. 
-* The relationship between sequences being called by nearest neighbor. Which will identify 40 nearest neighbors. If a clonal sequence has more than 40 cells with the TCR, this will automatically randomize the nearest neighbor call within the clonal cells.
-* 50 dimenshions will be returned using the spectral transformation.
+* Autoencoder model in Trex, specifically for the Kidera factors. 
+* The relationship between sequences being called by threshold. 
+* 50 dimensions will be returned using the spectral transformation.
 
 
 ```{r}
-list  <- runTrex(list, AA.method = "auto", 
-                    AA.properties = "AF", 
-                    nearest.method = "nn",
+list <- readRDS("./data/Fullintegrated_Tcell_seuratObjects.rds")
+library(Trex)
+list <- runTrex(list, 
+                    edit.method = "lv",
+                    AA.method = "auto", 
+                    AA.properties = "KF", 
+                    nearest.method = "threshold",
+                    threshold = 0.85,
                     near.neighbor = 40,
-                    n.dim = 50,
-                    reduction.name = "Trex.AF")
-saveRDS(list, file = "./data/Filteredintegrated_seuratObjects.rds")
+                    add.INKT = FALSE,
+                    add.MAIT = FALSE,
+                    reduction.name = "Trex.KF")
+saveRDS(list, file = "./data/Fullintegrated_Tcell_seuratObjects_wTrex.rds")
 ```
+
 
 ## Examining Trex Dimensions 
 
 One thing I found while building this package was the interesting differences between dimensions - the first several dimensions are clearly influenced by clone, however, as the dimensions increase a more continuous-like relationship emerges.
 
 ```{r}
-dir.create("./output")
+dir.create("./output/Figure2")
+list <- readRDS("./data/Fullintegrated_Tcell_seuratObjects_wTrex.rds")
 library(patchwork)
-dims <- list(c(1,2), c(3,4), c(5,6), c(7,8), c(9,10), c(11,12), c(13,14), c(15,16), c(17,18))
+dims <- list(c(1,2), c(3,4), c(5,6), c(7,8), c(9,10))
 
 for (i in seq_along(dims)) {
-  plot <- DimPlot(list, dims = unlist(dims[i]), reduction = "Trex.AF", group.by = "CTaa") +
+  plot <- DimPlot(list, dims = unlist(dims[i]), reduction = "Trex.KF", group.by = "CTaa") +
     scale_color_manual(values = viridis::viridis_pal(option = "B")(length(unique(list$CTaa)))) + 
     guides(color = "none") + 
-    theme_void() + 
-    theme(plot.title = element_blank())
+    theme(plot.title = element_blank(), 
+          axis.text = element_blank(), 
+          axis.ticks = element_blank(),
+          panel.border = element_rect(colour = "black", fill=NA, size=1), 
+          axis.title = element_blank())
   assign(paste0("Plot", i), plot)
 }
 
-Plot1 + Plot2 + Plot3 + Plot4 + Plot5 + Plot6 + Plot7 + Plot8  +  plot_layout(ncol = 4)
-ggsave("./output/DimExamination.png", height = 6, width = 12, dpi = 600, bg = "transparent")
+Plot1 + Plot2 + Plot3 + Plot4 + Plot5+  plot_layout(ncol = 5)
+ggsave("./output/Figure2/AllSamples_DimExamination_clones.png", height = 3, width = 15, dpi = 600, bg = "transparent")
+
+
+for (i in seq_along(dims)) {
+  plot <- DimPlot(list, dims = unlist(dims[i]), reduction = "Trex.KF", group.by = "Patient") +
+    scale_color_manual(values = viridis::viridis_pal(option = "H")(length(unique(list$Patient)))) + 
+    guides(color = "none") + 
+    theme(plot.title = element_blank(), 
+          axis.text = element_blank(), 
+          axis.ticks = element_blank(),
+          panel.border = element_rect(colour = "black", fill=NA, size=1), 
+          axis.title = element_blank())
+  assign(paste0("Plot", i), plot)
+}
+  
+  Plot1 + Plot2 + Plot3 + Plot4 + Plot5+  plot_layout(ncol = 5)
+ggsave("./output/Figure2/AllSamples_DimExamination_patient.png", height = 3, width = 15, dpi = 600, bg = "transparent")
+
 ```
 
-# Comparing the UMAP outputs from ADT vs RNA vs TCR
+# Calculating UMAPS TCR vectors
 
 ```{r}
-list <- RunUMAP(list, reduction = 'pca', dims = 1:30, assay = 'integrated', 
-              reduction.name = 'rna.umap', reduction.key = 'rnaUMAP_')
-
-list <- RunUMAP(list, reduction = 'apca', dims = 1:20, assay = 'ADT.integrated', 
-              reduction.name = 'adt.umap', reduction.key = 'adtUMAP_')
-
-list <- RunUMAP(list, reduction = 'Trex.AF', dims = 1:50, 
-              reduction.name = 'Trex.umap', reduction.key = 'trexUMAP_')
+list <- RunUMAP(list, 
+                        umap.method = "umap-learn",
+                        #graph = "Trex.KF_snn", 
+                     reduction = "Trex.KF",
+                     dims = 1:30,
+                        reduction.name = 'Trex.umap', 
+                        reduction.key = 'trexUMAP_')
 ```
+
+#Calculating and Visualizng Clonal Clusters
+```{r}
+
+############################
+#Calculating clonal clusters
+#############################
+library(bluster)
+list <- clonalCommunity(list, 
+                        reduction.name = "Trex.KF", 
+                        cluster.parameter = KNNGraphParam(k=100))
+
+df <- data.frame(list@reductions$Trex.umap@cell.embeddings, list[[]])
+
+
+ggplot(df, aes(x=trexUMAP_1, trexUMAP_2)) + 
+  stat_density_2d(aes(fill = stat(level)),
+                              geom = "polygon", 
+                          bins = 20)  + 
+  facet_grid(Tissue ~ ARDS) + 
+  scale_fill_viridis(option = "B") + 
+  theme_classic() + 
+  xlim(-15,35) + 
+  ylim(-15,25)
+ggsave("./output/Figure2/trexDistribution.pdf", height = 6, width = 7)
+
+df$trex.clusters <- as.character(df$trex.clusters)
+count.cluster <- df %>%
+  group_by(Patient, Tissue, ARDS, trex.clusters) %>%
+  dplyr::count()
+
+count.cluster <- count.cluster %>%
+  group_by(Patient, Tissue) %>%
+  mutate(total = sum(n)) %>%
+  ungroup() %>%
+  mutate(proportion = n/total)
+
+library(stringr)
+levels <- str_sort(unique(count.cluster$trex.clusters), numeric = TRUE)
+count.cluster$trex.clusters <- factor(count.cluster$trex.clusters, levels = levels)
+
+ggplot(count.cluster, aes(y = proportion, x = Tissue, fill = trex.clusters)) + 
+  geom_bar(position = "fill", stat = "summary", fun.y = "mean", lwd = 0.1, color = "white") + 
+  facet_grid(.~ARDS) + 
+  geom_bar_text(aes(label = trex.clusters), color = "white", 
+                position = "fill", stat = "summary", reflow = TRUE, 
+                place = 'middle', 
+                min.size = 3) + 
+  theme_classic() +  
+  scale_fill_viridis(option = "B", discrete = TRUE) + 
+  guides(fill = "none")
+ggsave("./output/Figure2/Specific.Trex.Clusters.pdf", height = 4, width = 6)
+```
+
+# Calculating UMAP for RNA and ADT
 
 ```{r}
-pal <- viridis::viridis_pal(option = "H")(length(unique(list$Patient)))
+list <- RunUMAP(list, reduction = 'pca', 
+                dims = 1:30, 
+                assay = 'integrated', 
+              reduction.name = 'rna.umap', 
+              reduction.key = 'rnaUMAP_', 
+              umap.method = "umap-learn")
 
-plot10 <- DimPlot(list, reduction = "rna.umap", group.by = "Patient") +
-   guides(color = "none") + 
-  scale_color_manual(values = pal) +
-  theme_void() + 
-  theme(plot.title = element_blank())
-plot11 <- DimPlot(list, reduction = "adt.umap", group.by = "Patient") +
-   guides(color = "none") + 
-  scale_color_manual(values = pal) +
-  theme_void() + 
-  theme(plot.title = element_blank())
-plot12 <- DimPlot(list, reduction = "Trex.umap", group.by = "Patient") +
-   guides(color = "none") + 
-  scale_color_manual(values = pal) +
-  theme_void() + 
-  theme(plot.title = element_blank())
-
-plot10 + plot11 + plot12
-
-ggsave("./output/UMAPcompare_byPatient.png", height = 3, width = 9, dpi = 600, bg = "transparent")
-
-
-list$cloneType <- factor(list$cloneType, 
-                levels = c("Hyperexpanded (0.1 < X <= 1)", 
-                           "Large (0.01 < X <= 0.1)", 
-                            "Medium (0.001 < X <= 0.01)", 
-                            "Small (1e-04 < X <= 0.001)", 
-                            "Rare (0 < X <= 1e-04)", NA))
-
-plot13 <- DimPlot(list, reduction = "rna.umap", group.by = "cloneType") +
-   guides(color = "none") + 
-  scale_color_manual(values = rev(viridis_pal(option = "B")(5))) +
-  theme_void() + 
-  theme(plot.title = element_blank())
-plot14 <- DimPlot(list, reduction = "adt.umap", group.by = "cloneType") +
-   guides(color = "none") + 
-  scale_color_manual(values = rev(viridis_pal(option = "B")(5))) +
-  theme_void() + 
-  theme(plot.title = element_blank())
-plot15 <- DimPlot(list, reduction = "Trex.umap", group.by = "cloneType") +
-   guides(color = "none") + 
-  scale_color_manual(values = rev(viridis_pal(option = "B")(5))) +
-  theme_void() + 
-  theme(plot.title = element_blank())
-
-plot13 + plot14 + plot15
-ggsave("./output/UMAPcompare_byClonotype.png", height = 3, width = 9, dpi = 600, bg = "transparent")
+list <- RunUMAP(list, reduction = 'apca', 
+                dims = 1:20, 
+                assay = 'ADT.integrated', 
+              reduction.name = 'adt.umap', 
+              reduction.key = 'adtUMAP_', 
+              umap.method = "umap-learn")
 ```
 
-```{r}
-seuratObj <- RunHarmony(list, "dataset")
-seuratObj <- RunUMAP(seuratObj, reduction = "harmony")
-```
 
-## Calculating the multi-modal neighbor 
+
+# Calculating the multi-modal neighbor 
 
 ```{r}
 list <- FindMultiModalNeighbors(
-  list, reduction.list = list("pca", "apca", "Trex.AF"), 
-  dims.list = list(1:30, 1:20, 1:50), modality.weight.name = "RNA.weight")
-
+  list, 
+  k.nn = 40,
+  reduction.list = list("pca", "apca", "Trex.KF"), 
+  dims.list = list(1:30, 1:20, 1:30), modality.weight.name = "RNA.weight"
+)
 list <- RunUMAP(list, nn.name = "weighted.nn", 
                      reduction.name = "wnn.umap", reduction.key = "wnnUMAP_")
-list <- FindClusters(list, graph.name = "wknn", algorithm = 3, resolution = 0.8, verbose = FALSE)
+list <- FindClusters(list, graph.name = "wsnn", resolution = 0.6,
+                          algorithm = 1, verbose = FALSE)
 
+#WNN UMAP
+dir.create("./output/Figure3")
+levels <- str_sort(unique(list$trex.clusters), numeric = TRUE)
+list$trex.clusters <- factor(list$trex.clusters, levels = levels)
 
-plot16 <- DimPlot(list, reduction = "wnn.umap",  label = TRUE) + NoLegend()
-plot17 <- DimPlot(list, reduction = "wnn.umap", group.by = "CTaa") + scale_color_manual(values = viridis_pal(option = "B")(length(unique(list$CTaa)))) + NoLegend()
-plot18 <- DimPlot(list, group.by = "cloneType", reduction = "wnn.umap") + scale_color_manual(values = rev(viridis_pal(option = "B")(5))) + NoLegend()
+DimPlot(list, reduction = "wnn.umap", group.by = "trex.clusters") + 
+  scale_color_manual(values = viridis::viridis_pal(option = "H")(length(unique(list$trex.clusters)))) + 
+  theme_void() + 
+  theme(plot.title = element_blank()) + 
+  
+        NoLegend()
+ggsave(filename = paste0("./output/Figure3/WNN.clone.umap.png"), height = 5, width = 5, dpi = 600)
 
-group_by()
+plot10 <- DimPlot(list, reduction = "rna.umap", group.by = "trex.clusters") +
+   guides(color = "none") + 
+  scale_color_manual(values = viridis::viridis_pal(option = "H")(length(unique(list$trex.clusters)))) +
+  theme_void() + 
+  theme(plot.title = element_blank())
+plot11 <- DimPlot(list, reduction = "adt.umap", group.by = "trex.clusters") +
+   guides(color = "none") + 
+  scale_color_manual(values = viridis::viridis_pal(option = "H")(length(unique(list$trex.clusters)))) +
+  theme_void() + 
+  theme(plot.title = element_blank())
+plot12 <- DimPlot(list, reduction = "Trex.umap", group.by = "trex.clusters") +
+   guides(color = "none") + 
+  scale_color_manual(values = viridis::viridis_pal(option = "H")(length(unique(list$trex.clusters)))) +
+  theme_void() + 
+  theme(plot.title = element_blank())
 
+plot10 + plot11 + plot12 + plot_layout(ncol=1)
+ggsave(filename = paste0("./output/Figure3/ALL.umap.png"), height = 15, width = 5, dpi = 600)
 ```
 
-# Nearest Neighbor Index between modalities
+Plotting Protein Densities
+
 ```{r}
-list <- RunHarmony(list, reduction = "Trex.AF", group.by.vars = c("CTaa", "Patient"))
+library(Nebulosa)
+DefaultAssay(list) <- "ADT"
+ 
+genes <- c("CD45RO-TotalSeqC", "CD45RA-TotalSeqC", "CD8-TotalSeqC", "CD4-TotalSeqC", "CD25-TotalSeqC", "CTLA4-TotalSeqC", "LAG3-TotalSeqC", "PDL1-TotalSeqC")
+
+for (i in seq_along(genes)) {
+  plot_density(list, 
+               reduction = "wnn.umap", 
+               features =genes[i]) + 
+    scale_color_viridis(option = "B") + 
+    guides(color = "none") + 
+    theme_void() + 
+    theme(plot.title = element_blank())
+  ggsave(filename = paste0("./output/Figure3/", genes[i], ".png"), height = 3, width = 3, dpi = 600)
+}
+
+saveRDS(list, file = "./data/Fullintegrated_Tcell_seuratObjects_wTrex.rds")
+```
+
+# Reducing the to clonotype representations
+#Recalculates the UMAP and multimodal neighbors
+
+```{r}
+conga <- CoNGAfy(list, method = "dist", assay = c("RNA", "ADT"), 
+                 meta.carry = c("CTaa", "CTgene"))
+
+saveRDS(conga, file = "Integrated.Conga.rds")
+
+conga <- readRDS("./data/Integrated.Conga.rds")
+
+DefaultAssay(conga) <- "RNA"
+conga <- NormalizeData(conga)
+conga <- FindVariableFeatures(conga)
+conga <- ScaleData(conga)
+conga <- RunPCA(conga)
+
+conga <- RunUMAP(conga, reduction = 'pca', 
+                dims = 1:30, 
+                assay = 'RNA', 
+              reduction.name = 'rna.umap', 
+              reduction.key = 'rnaUMAP_', 
+              umap.method = "umap-learn")
+
+DefaultAssay(conga) <- "ADT"
+VariableFeatures(conga, assay = "ADT") <- rownames(conga[["ADT"]])
+conga <- NormalizeData(conga, 
+                       normalization.method = 'CLR', margin = 2)
+conga <- ScaleData(conga)
+conga <- RunPCA(conga, 
+                reduction.name = "apca")
+
+conga <- RunUMAP(conga, reduction = 'pca', 
+                dims = 1:30, 
+                assay = 'ADT', 
+              reduction.name = 'ADT.umap', 
+              reduction.key = 'adtUMAP_', 
+              umap.method = "umap-learn")
+
+conga <- runTrex(conga, 
+                    edit.method = "lv",
+                    AA.method = "auto", 
+                    AA.properties = "KF", 
+                    nearest.method = "threshold",
+                    threshold = 0.85,
+                    near.neighbor = 40,
+                    add.INKT = FALSE,
+                    add.MAIT = FALSE,
+                    reduction.name = "Trex.KF")
+
+
+ conga<- RunUMAP(conga, 
+                        umap.method = "umap-learn",
+                        #graph = "Trex.KF_snn", 
+                     reduction = "Trex.KF",
+                     dims = 1:30,
+                        reduction.name = 'Trex.umap', 
+                        reduction.key = 'trexUMAP_')
+ saveRDS(conga, file = ".data/Integrated.Conga.rds")
+
+
+ meta <- df %>% 
+   group_by(CTaa, Patient, trex.clusters) %>%
+   count()
+x <- table(meta$CTaa)
+x <- x[x > 1]
+
+'%!in%' <- Negate("%in%")
+  meta <- meta[meta$CTaa %!in% names(x), ]
+  rownames.meta <- meta$CTaa
+  meta <- meta[,-1]
+  rownames(meta) <- rownames.meta
+conga <- AddMetaData(conga, meta)  
+
+conga$ARDS <- ifelse(conga$Patient == "S8", "moderate", "severe")
+levels <- str_sort(unique(conga$trex.clusters), numeric = TRUE)
+conga$trex.clusters <- factor(conga$trex.clusters, levels = levels)
+
+#######################################################
+#Remove Cluster 12, skews distribution as it is so large
+######################################################
+
+conga <- subset(conga, trex.clusters != "trex.12")
+conga <- FindMultiModalNeighbors(
+  conga, 
+  k.nn = 40,
+  reduction.list = list("pca", "apca", "Trex.KF"), 
+  dims.list = list(1:30, 1:20, 1:30), modality.weight.name = "RNA.weight"
+)
+
+conga <- RunUMAP(conga, nn.name = "weighted.nn", 
+                     reduction.name = "wnn.umap", reduction.key = "wnnUMAP_")
+
+levels <- str_sort(unique(conga$trex.clusters), numeric = TRUE)
+conga$trex.clusters <- factor(conga$trex.clusters, levels = levels)
+
+conga <- FindClusters(conga, graph.name = "wknn", algorithm = 3, resolution = 0.6, verbose = FALSE)
+
+DimPlot(conga, reduction = "wnn.umap", label = TRUE) + 
+  theme_void() + 
+  theme(plot.title = element_blank()) + 
+  scale_colour_tableau(palette = "Tableau 20") + 
+  
+        NoLegend()
+ggsave(filename = paste0("./output/Figure3/WNN.conga.clone.umap.png"), height = 5, width = 5, dpi = 600)
+```
+
+# Conga Protein Densities
+
+```{r}
+genes <- c("CD45RO-TotalSeqC", "CD45RA-TotalSeqC", "CD8-TotalSeqC", "CD4-TotalSeqC", "CD25-TotalSeqC", "CTLA4-TotalSeqC", "LAG3-TotalSeqC", "PDL1-TotalSeqC")
+
+for (i in seq_along(genes)) {
+  plot_density(conga, 
+               reduction = "wnn.umap", 
+               features =genes[i]) + 
+    scale_color_viridis(option = "B") + 
+    guides(color = "none") + 
+    theme_void() + 
+    theme(plot.title = element_blank())
+  ggsave(filename = paste0("./output/Figure3/", genes[i], ".wnn.png"), height = 3, width = 3, dpi = 600)
+}
 ```
 

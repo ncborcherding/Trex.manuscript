@@ -1,0 +1,394 @@
+---
+title: "C3: Regression of clones for Sample 1"
+author: 
+- name: Nick Borcherding
+  email: ncborch@gmail.com
+  affiliation: Washington University in St. Louis, School of Medicine, St. Louis, MO, USA
+date: "January 10, 2022"
+output:
+  BiocStyle::html_document:
+    toc_float: true
+
+---
+
+In reference to the manuscript, this analysis centers of Figure 4
+
+```{r}
+library(Seurat)
+list <- readRDS("./data/Fullintegrated_Tcell_seuratObjects.rds")
+list <- SplitObject(list, split.by = "Patient")
+#Selecting sample 1
+list <- list[1]
+```
+#Bootstrap function for adjusted rand index
+
+```{r}
+#Modified from bluster package to fit needs
+bootstrapStability <- function(x, FUN=clusterRows, clusters=NULL, iterations=20, 
+    average=c("median", "mean"), ..., compare=NULL, mode="ratio", adjusted=TRUE, transposed=FALSE)
+{
+    if (is.null(clusters)) {
+        clusters <- FUN(x, ...)
+    }
+    clusters <- as.factor(clusters)
+
+    if (iterations <= 0L) {
+        stop("'iterations' must be a positive integer")
+    }
+
+    collated <- vector("list", iterations)
+    if (is.null(compare)) {
+        compare <- function(...) bluster::pairwiseRand(..., mode=mode, adjusted=adjusted)
+    }
+
+    for (i in seq_len(iterations)) {
+        if (!transposed) {
+            chosen <- sample(nrow(x), nrow(x), replace=TRUE)
+            resampled <- x[chosen,,drop=FALSE]
+        } else {
+            chosen <- sample(ncol(x), ncol(x), replace=TRUE)
+            resampled <- x[,chosen,drop=FALSE]
+        }
+        reclusters <- FUN(resampled, ...)
+        collated[[i]] <- compare(clusters[chosen], reclusters)
+    }
+
+    if (length(unique(lapply(collated, dim))) > 1L) { 
+        stop("'compare' output should have constant dimension")
+    }
+
+    # A robust way of computing the average that handles NAs.
+    as.mat <- do.call(cbind, lapply(collated, as.numeric))
+
+    average <- match.arg(average)
+    if (average=="mean") {
+        averaged <- rowMeans(as.mat, na.rm=TRUE)
+    } else {
+        averaged <- apply(as.mat, 1, median, na.rm=TRUE)
+    }
+
+    dim(averaged) <- dim(collated[[1]])
+    dimnames(averaged) <- dimnames(collated[[1]])
+    list.return <- list(ARI = averaged, ratios = as.mat) 
+    return(list.return)
+}
+```
+
+```{r}
+library(Trex)
+library(bluster)
+library(viridis)
+library(Nebulosa)
+library(harmony)
+library(patchwork) 
+library(ggplot2)
+library(ggpubr)
+library(igraph)
+
+dir.create("output/Figure4")
+for(i in seq_along(list)) {
+      set.seed(42)
+      DefaultAssay(list[[i]]) <- "RNA"
+      list[[i]] <- runTrex(list[[i]], 
+                          edit.method = "lv",
+                          AA.method = "auto", 
+                          near.neighbor = 40,
+                          threshold = 0.85,
+                          AA.properties = "KF", 
+                          nearest.method = "threshold",
+                          add.INKT = FALSE,
+                          add.MAIT = FALSE,
+                          reduction.name = "Trex.KF")
+      list[[i]]  <- clonalCommunity(list[[i]], 
+                            reduction.name = "Trex.KF", 
+                            cluster.parameter=NNGraphParam(k=10))
+      
+      dims <- list(c(1,2), c(3,4), c(5,6), c(7,8), c(9,10), c(11,12), c(13,14), c(15,16), c(17,18))
+
+      for (j in seq_along(dims)) {
+        plot <- DimPlot(list[[i]], dims = unlist(dims[j]), reduction = "Trex.KF", group.by = "CTaa") +
+          scale_color_manual(values = viridis::viridis_pal(option = "B")(length(unique(list[[i]]$CTaa)))) + 
+          guides(color = "none") + 
+          theme(plot.title = element_blank(), 
+                axis.text = element_blank(), 
+                axis.ticks = element_blank(),
+                panel.border = element_rect(colour = "black", fill=NA, size=0.5), 
+                axis.title = element_blank())
+        assign(paste0("Plot", j), plot)
+      }
+      
+      Plot1 + Plot2 + Plot3 + Plot4 + Plot5 + Plot6 + Plot7 + Plot8  +  plot_layout(ncol = 4)
+      ggsave(paste0("./output/Figure4/", names(list)[i], "/DimExamination.png"), height = 6, width = 12, dpi = 600, bg = "transparent")
+
+
+      #Harmony for Sequencing Run
+      list[[i]] <- RunHarmony(list[[i]], "orig.ident", verbose = FALSE, 
+                              reduction.save = "harmony.batch", project.dim = FALSE)
+      #Harmony for Sequencing Run and Clonal Group
+      list[[i]] <- RunHarmony(list[[i]], c("orig.ident", "trex.clusters"), verbose = FALSE, 
+                              reduction.save = "harmony.batch.tcr", project.dim = FALSE)
+      
+      list[[i]] <- list[[i]] %>% 
+          RunUMAP(umap.method = "umap-learn", 
+                  reduction = "harmony.batch",
+                  dims = 1:30,
+                  reduction.name = 'RNA.umap', 
+                  reduction.key = 'rnaUMAP_') %>%
+          FindNeighbors(reduction = "harmony.batch", 
+                        dims = 1:30, 
+                        annoy.metric = "cosine", 
+                        graph.name = "batch", 
+                     return.neighbor = TRUE) %>%
+        FindNeighbors(reduction = "harmony.batch", 
+                        dims = 1:30, 
+                        annoy.metric = "cosine", 
+                        graph.name = "batch.cluster") %>%
+        FindClusters(resolution = 0.6, 
+                       algorithm = 3,
+                       graph.name = "batch.cluster") %>% 
+          identity()
+      list[[i]][["rna.ident"]] <- Idents(object = list[[i]])
+
+      list[[i]] <- list[[i]] %>% 
+          RunUMAP(umap.method = "umap-learn", 
+                  reduction = "harmony.batch.tcr",
+                  dims = 1:30,
+                  reduction.name = 'RNA.tcr.umap', 
+                  reduction.key = 'rnatcrUMAP_') %>%
+          FindNeighbors(annoy.metric = "cosine",
+                     reduction = "harmony.batch.tcr", 
+                     dims = 1:30, 
+                     graph.name = "batch.tcr", 
+                     return.neighbor = TRUE) %>% 
+        FindNeighbors(annoy.metric = "cosine",
+                     reduction = "harmony.batch.tcr", 
+                     dims = 1:30, 
+                     graph.name = "batch.tcr.cluster") %>% 
+          FindClusters(resolution = 0.6, 
+                       algorithm = 3, 
+                       graph.name = "batch.tcr.cluster") %>% 
+          identity()
+      list[[i]][["rna.tcr.ident"]] <- Idents(object = list[[i]])
+      
+      list[[i]] <- FindNeighbors(list[[i]], 
+                     annoy.metric = "cosine",
+                     reduction = "pca", 
+                     dims = 1:30, 
+                     graph.name = "no.correction", 
+                     return.neighbor = TRUE)
+      
+      ##########################
+      #Checking Cluster stability
+      ###########################
+      
+      reductions <- c("no.correction","batch", "batch.tcr") 
+      
+      #Function to return SLM-based clusters based on the jar
+      #module that Seurat uses
+      myClusterFUN <- function(x) {
+        g <- bluster::makeSNNGraph(x, type="jaccard", k = 30)
+        y <- Seurat:::RunModularityClustering(as_adjacency_matrix(g), 
+                                            modularity=1, 
+                                            resolution = 0.6,
+                                            algorithm = 3, 
+                                            print.output = FALSE)
+      return(y)
+      }
+      it <- 100
+      for(ii in seq_along(reductions)) {
+        
+          pcs <- list[[i]]@neighbors[[reductions[ii]]]@nn.dist
+          originals <- myClusterFUN(pcs)
+          
+          set.seed(0010010100)
+          ratios <- bootstrapStability(pcs, FUN=myClusterFUN, 
+                                                  clusters=originals,  
+                                                  compare = NULL, 
+                                                  mode="index", 
+                                                  transposed = FALSE, 
+                                                  iterations = it)
+          if (ii == 1) {
+            results <- list(ratios)
+          } else {
+            results[[ii]] <- ratios
+          }
+          
+        }
+        names(results) <- reductions
+        saveRDS(results, paste0("./output/Figure4/", names(list)[i], "/clusterRandResults.rds"))
+        results <- readRDS(paste0("./output/Figure4/", names(list)[i], "/clusterRandResults.rds"))
+        
+        df <- as.data.frame(c(results[[1]]$ratios, results[[2]]$ratios, results[[3]]$ratios))
+        df$class <- c(rep("no.correction", it), rep("batch", it), rep("batch.tcr", it))
+        df$class <- factor(df$class, levels = c(reductions))
+        colnames(df)[1] <- "rand.index"
+        
+        my_comparisons <- list( c(reductions[1:2]), c(reductions[2:3]), c(reductions[c(1,3)]))
+                                
+        plotX <- ggplot(df, aes(x = class, y = rand.index)) + geom_boxplot() + geom_jitter() + 
+          stat_compare_means(comparisons = my_comparisons, label = "p.signif") + 
+          theme_classic() + 
+          theme(axis.title.x = element_blank())
+        
+        colors <- rev(viridis_pal(option = "B")(5))
+        names(colors) <- levels(list[[i]]$cloneType)
+        
+        
+         ggsave(filename = paste0("./output/Figure4/", names(list)[i], "/RandResults.pdf"), height = 4, width = 4, bg = "transparent")
+      
+      ################################
+      #Harmony Sample Integration UMAP
+      ##################################
+      
+      plot7 <- DimPlot(list[[i]], reduction = "RNA.umap", group.by = "orig.ident") + 
+        scale_color_viridis(option = "B", discrete = TRUE) + 
+        theme(plot.title = element_blank()) + 
+        NoLegend()
+
+      ggsave(plot7, filename = paste0("./output/Figure4/", names(list)[i], "/HarmonyRNA.umap.png"), height = 3.5, width = 4, dpi = 600, bg = "transparent")
+      
+      plot8 <- DimPlot(list[[i]], reduction = "RNA.tcr.umap", group.by = "orig.ident") + 
+        scale_color_viridis(option = "B", discrete = TRUE) + 
+        theme(plot.title = element_blank()) + 
+        NoLegend()
+      
+      ggsave(plot8, filename = paste0("./output/Figure4/", names(list)[i], "/HarmonyRNA.TCR.umap.png"), height = 3.5, width = 4, dpi = 600, bg = "transparent")
+      
+      #########################
+      #Clustering UMAP
+      #########################
+
+
+      DimPlot(list[[i]], reduction = "RNA.umap", label = TRUE, group.by = "rna.ident") + 
+        scale_colour_tableau(palette = "Tableau 20") + 
+          theme_void() + 
+        theme(plot.title = element_blank()) + 
+        NoLegend() 
+
+      ggsave(filename = paste0("./output/Figure4/", names(list)[i], "/RNA.cluster.umap.png"), height = 3.5, width = 4, dpi = 600, bg = "transparent")
+      
+
+      DimPlot(list[[i]], reduction = "RNA.tcr.umap", label = TRUE, group.by = "rna.tcr.ident") + 
+        scale_colour_tableau(palette = "Tableau 20") + 
+          theme_void() + 
+        theme(plot.title = element_blank()) + 
+        NoLegend() 
+
+      ggsave(filename = paste0("./output/Figure4/", names(list)[i], "/RNA.tcr.cluster.umap.png"), height = 3.5, width = 4, dpi = 600, bg = "transparent")
+      
+      #################################
+      #Annotation Bar Graphs
+      ##################################
+      
+      CD4.annot <- table(list[[i]]$CD4.annot.mod, list[[i]]$rna.ident, useNA = "ifany")
+      for (y in seq_len(ncol(CD4.annot))) {
+        CD4.annot[,y] <- CD4.annot[,y]/sum(CD4.annot[,y])
+      }
+      CD4.annot <- as.data.frame(CD4.annot)
+      
+      
+      ggplot(CD4.annot, aes(x = Var2, fill = Var1, y = Freq)) + 
+        geom_bar(stat = "identity", position = "fill") + 
+        geom_hline(yintercept = 0.5) + 
+        geom_hline(yintercept = c(0.4, 0.6), lty = 2) + 
+        coord_flip() +
+        theme_classic() +
+        labs(fill = "CellType") + 
+        scale_fill_manual(values = rev(viridis_pal(option = "H")(length(unique(CD4.annot$Var1)))))+ 
+        theme(axis.title = element_blank())
+      ggsave(paste0("output.Patient/", names(list)[i], "/CD4.mod.rna.distribution.pdf"), height = 4, width = 5)
+      
+       CD4.annot <- table(list[[i]]$CD4.annot.mod, list[[i]]$rna.tcr.ident, useNA = "ifany")
+      for (y in seq_len(ncol(CD4.annot))) {
+        CD4.annot[,y] <- CD4.annot[,y]/sum(CD4.annot[,y])
+      }
+      CD4.annot <- as.data.frame(CD4.annot)
+      
+      
+      ggplot(CD4.annot, aes(x = Var2, fill = Var1, y = Freq)) + 
+        geom_bar(stat = "identity", position = "fill") + 
+        geom_hline(yintercept = 0.5) + 
+        geom_hline(yintercept = c(0.4, 0.6), lty = 2) + 
+        coord_flip() +
+        theme_classic() +
+        labs(fill = "CellType") + 
+        scale_fill_manual(values = rev(viridis_pal(option = "H")(length(unique(CD4.annot$Var1)))))+ 
+        theme(axis.title = element_blank())
+      ggsave(paste0("output.Patient/", names(list)[i], "/CD4.mod.rna.tcr.distribution.pdf"), height = 4, width = 5)
+      
+      CD8.annot <- table(list[[i]]$CD8.annot.mod, list[[i]]$rna.ident, useNA = "ifany")
+      for (z in seq_len(ncol(CD8.annot))) {
+        CD8.annot[,z] <- CD8.annot[,z]/sum(CD8.annot[,z])
+      }
+      CD8.annot <- as.data.frame(CD8.annot)
+      
+      ggplot(CD8.annot, aes(x = Var2, fill = Var1, y = Freq)) + 
+        geom_bar(stat = "identity", position = "fill") + 
+        geom_hline(yintercept = 0.5) + 
+        geom_hline(yintercept = c(0.4, 0.6), lty = 2) + 
+        coord_flip() +
+        theme_classic() +
+        labs(fill = "CellType") + 
+        scale_fill_manual(values = rev(viridis_pal(option = "H")(length(unique(CD8.annot$Var1)))))+ 
+        theme(axis.title = element_blank())
+      ggsave(paste0("output.Patient/", names(list)[i], "/CD8.mod.distribution.pdf"), height = 4, width = 5)
+      
+     ###################
+      #Protein Heatmaps
+      ###################
+
+      #RNA-based cluster heatmap for protein
+      adt.tmp <- data.frame(t(as.matrix(list[[i]]@assays$ADT@counts)), list[[i]]$rna.ident)
+      colnames(adt.tmp)[38] <- "cluster"
+     table <-  adt.tmp %>% 
+        group_by(cluster) %>%
+       summarise(across(1:37, mean))
+     table <- table[,c(1:2,4:6, 8,12:17,20,22:24, 26:28,26)]
+      colnames(table) <- stringr::str_split(colnames(table), "[.]", simplify = TRUE)[,1]
+     normalize <- function(x)
+{
+    (x- min(x)) /(max(x)-min(x))
+}
+
+for (i in 2:20) {
+  table[,i] <- normalize(table[,i] )
+}
+     names <- table$cluster
+     table <- table[,-1]
+     rownames(table) <- names
+     pdf(paste0("output.Patient/", names(list)[i], "/rna.heatmap.pdf"), height = 3, width = 3)
+ pheatmap::pheatmap(t(table), show_colnames = TRUE, color = viridis_pal(option = "B")(50))    
+ dev.off()
+ 
+  #RNA.tcr-based cluster heatmap for protein
+      adt.tmp <- data.frame(t(as.matrix(list[[i]]@assays$ADT@counts)), list[[i]]$rna.tcr.ident)
+      colnames(adt.tmp)[38] <- "cluster"
+     table <-  adt.tmp %>% 
+        group_by(cluster) %>%
+       summarise(across(1:37, mean))
+     table <- table[,c(1:2,4:6, 8,12:17,20,22:24, 26:28,26)]
+      colnames(table) <- stringr::str_split(colnames(table), "[.]", simplify = TRUE)[,1]
+     normalize <- function(x)
+{
+    (x- min(x)) /(max(x)-min(x))
+}
+
+for (i in 2:20) {
+  table[,i] <- normalize(table[,i] )
+}
+     names <- table$cluster
+     table <- table[,-1]
+     rownames(table) <- names
+     pdf(paste0("output.Patient/", names(list)[i], "/rna.tcr.heatmap.pdf"), height = 3, width = 3)
+ pheatmap::pheatmap(t(table), show_colnames = TRUE, color = viridis_pal(option = "B")(50))    
+ dev.off()
+ 
+ 
+
+}
+
+for (i in seq_along(list)) {
+  saveRDS(list[[i]], paste0("./data/Patient.", names(list)[i], ".rds"))
+}
+```
+

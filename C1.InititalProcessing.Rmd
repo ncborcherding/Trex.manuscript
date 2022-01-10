@@ -4,7 +4,7 @@ author:
 - name: Nick Borcherding
   email: ncborch@gmail.com
   affiliation: Washington University in St. Louis, School of Medicine, St. Louis, MO, USA
-date: "August 19, 2020"
+date: "January 10, 2022"
 output:
   BiocStyle::html_document:
     toc_float: true
@@ -15,12 +15,6 @@ output:
 knitr::opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
 library(BiocStyle)
 ```
-
-# Introduction
-
-
-##Computer Info:
-Analysis is being run on a 13-inch Macbook Pro (2017) with 3.5 GHz Dual-Core i7 and 16 GB of 2133 MHz LPDDR3. There is a limit to the speed and RAM, so for the purposes of the markdown file, I will not run some of the code blocks during the kniting (look at eval = F). You will also see the call *rm()* frequently to just remove non-vital objects from the global environment.
 
 ***
 
@@ -37,7 +31,6 @@ suppressPackageStartupMessages(library(viridis))
 suppressPackageStartupMessages(library(scDblFinder))
 suppressPackageStartupMessages(library(BiocParallel))
 suppressPackageStartupMessages(library(Trex))
-
 ```
 
 I also like to set a color palette before I begin - this way all the colors are consistent throughout the publication figures.
@@ -193,6 +186,10 @@ list <- FindMultiModalNeighbors(
   dims.list = list(1:30, 1:30), modality.weight.name = "RNA.weight"
 )
 
+###########################
+#Test for K parameters use
+############################
+
 k <- c(15,20,25,30,35,40,45,50,55,60,65)
 dir.create("./dataExplore/keval")
 out <- NULL
@@ -220,24 +217,25 @@ colnames(out) <- c("k", "mean", "median", "stdev")
 write.csv(out, "./dataExplore/keval/ClusterPerformance.csv", row.names = FALSE)
 ```
 
+I also want to assess the resolution of the clustering, so I will loop through several resolutions and then use a clustertree for examining stability.
 
 ```{r}
-list <- ref_LCMV_Atlas_mouse_v1.rdsAP(list, 
+list <- RunUMAP(list, 
                 nn.name = "weighted.nn", 
                 reduction.name = "wnn.umap", 
                 reduction.key = "wnnUMAP_", 
                 n.neighbors = 50)
 
 
-res <- k <- c(0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5)
+res <- c(0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5)
 for (i in seq_along(res)) {
   list <- FindClusters(list, graph.name = "wsnn", algorithm = 3, resolution = res[i], verbose = FALSE)
 }
-```
 
-Evaluating clustering by resolution using clustree
+####################################################
+#Evaluating clustering by resolution using clustree
+####################################################
 
-```{r}
 library(clustree)
 clustree(list, prefix = "wsnn_res.", layout = "sugiyama")
 ggsave("./dataExplore/ClusterTree_resolution.pdf", height = 12, width = 12)
@@ -245,6 +243,7 @@ ggsave("./dataExplore/ClusterTree_resolution.pdf", height = 12, width = 12)
 clustree(list, prefix = "wsnn_res.", layout = "sugiyama", node_colour = "sc3_stability")
 ggsave("./dataExplore/ClusterTree_stability.pdf", height = 12, width = 12)
 ```
+
 Selecting the resolution of 0.8 based on the clustree results. 
 
 ```{r}
@@ -395,11 +394,9 @@ saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
 ```
 
 
-
-
 ## Simplify Clusters 
 
-There are 11 clusters with 2 or less cells - the following removes them and renumbers the clustering 
+There are 11 clusters with 2 or less cells - the following removes them and renumbers the clustering.
 
 ```{r}
 list <- subset(list, idents = names(which(table(list$seurat_clusters) > 10)))
@@ -414,52 +411,7 @@ DimPlot(list, label = TRUE)  + scale_color_manual(values = viridis_pal(option = 
 ggsave("UMAP_clusters.png", dpi = 600, height = 3.5, width = 3.5)
 saveRDS(list, file = "./data/Fullintegrated_seuratObjects.rds")
 ```
-## Graphing canonical marker genes
 
-```{r}
-dir.create("./output/LineageMarkers")
-file_list <- list.files("./data/markers.genes")
-file_list <- file_list[grepl(".txt", file_list)]
-files <- file.path(paste0("./data/markers.genes/", file_list))
-marker_list <- list()
-for (i in 1:length(files)) {
-    marker_list[[i]] <- read.delim(paste0(files[i]), col.names = FALSE)
-    for (j in seq_len(nrow(marker_list[[i]]))) {
-      marker_list[[i]][j,] <- toupper( marker_list[[i]][j,])
-    }
-}
-names <- stringr::str_remove(file_list, ".txt")
-names(marker_list) <- names
-
-suppressPackageStartupMessages(library(schex))
-list <- make_hexbin(list, 128, dimension_reduction = "wnn.umap")
-DefaultAssay(list) <- "RNA"
-
-dir.create("./output/LineageMarkers")
-for (i in seq_along(marker_list)) {
-    tmp <- as.character(unlist(marker_list[i]))
-    for (j in seq_along(tmp)) {
-        if (length(which(rownames(list@assays$RNA@counts) == tmp[j])) == 0){
-            next() #Need to loop here because plot_hexbin_feature() does not have a built-in function to deal with absence of selected gene
-        } else {
-        plot <- plot_hexbin_feature(list, feature = tmp[j], type = "counts", action = "prop_0")+ 
-             guides(fill="none", color = "none") + 
-                scale_fill_viridis(option = "B") 
-        ggsave(path = "./output/LineageMarkers", file = paste0(names(marker_list)[i], "_", tmp[j], "_prop.pdf"), plot, height=3, width=3.25)
-        }
-    }
-}
-
-DefaultAssay(list) <- "ADT"
-tmp <- rownames(list@assays$ADT@counts)
-
-for (j in seq_along(tmp)) {
-        plot <- plot_hexbin_feature(list, feature = tmp[j], type = "data", mod = "ADT", action = "median")+ 
-             guides(fill="none", color = "none") + 
-                scale_fill_viridis(option = "B") 
-        ggsave(path = "./output/LineageMarkers", file = paste0(tmp[j], "_prop.pdf"), plot, height=3, width=3.25)
-        }
-```
 
 ## Consensus Clustering
 ```{r}
@@ -476,342 +428,6 @@ list@meta.data$CD4.annot.mod <- list@meta.data$CD4.annot
 list@meta.data$CD4.annot.mod <- ifelse(list@meta.data$CD8.ADT == "Yes", NA, list@meta.data$CD4.annot.mod)
 list@meta.data$CD8.annot.mod <- list@meta.data$CD8.annot
 list@meta.data$CD8.annot.mod <- ifelse(list@meta.data$CD8.ADT == "No", NA, list@meta.data$CD8.annot.mod)
+
+saveRDS(list, "./data/Fullintegrated_Tcell_seuratObjects.rds")
 ```
-
-```{r}
-df <- as.data.frame(list@reductions$wnn.umap@cell.embeddings)
-meta <- list[[]]
-
-xmin <- round(min(df$wnnUMAP_1)-1)
-xmax <- round(max(df$wnnUMAP_1)+1)
-
-ymin <- round(min(df$wnnUMAP_2)-1)
-ymax <- round(max(df$wnnUMAP_2)+1)
-
-basePlot <- ggplot(df, aes(x = wnnUMAP_1, y = wnnUMAP_2)) + 
-  geom_point(col = "grey", stroke = 0) + 
-  theme_void() + 
-  xlim(xmin, xmax) + 
-  ylim(ymin, ymax)
-
-types <- sort(unique(list$CD4.annot.mod))
-for (i in seq_along(types)) {
-  tmp <- which(meta$CD4.annot.mod == types[i])
-  plot <- basePlot + 
-    stat_density_2d(df[tmp,], mapping = aes(x = wnnUMAP_1, 
-                              y = wnnUMAP_2, fill = stat(level)),
-                        geom = "polygon", 
-                    bins = 20) + 
-    theme_void() + 
-    scale_fill_viridis(option = "B") + 
-    guides(fill = "none")  + 
-    ggtitle(types[i])
-  assign(types[i], plot)
-}
-
-library(patchwork) 
-#paste(types, collapse = "+")
-Eomes_HI+INFI_stimulated+Tcm+Tcmp+Tfh_Effector+Tfh_Memory+Th1_Effector+Th1_Memory+Treg
-ggsave("CD4.ProjecTIL.annotation.mod.png", height = 9, width = 10, dpi = 600)
-
-types <- sort(unique(list$CD8.annot.mod))
-for (i in seq_along(types)) {
-  tmp <- which(meta$CD8.annot.mod == types[i])
-  plot <- basePlot + 
-    stat_density_2d(df[tmp,], mapping = aes(x = wnnUMAP_1, 
-                              y = wnnUMAP_2, fill = stat(level)),
-                        geom = "polygon", 
-                    bins = 20) + 
-    theme_void() + 
-    scale_fill_viridis(option = "B") + 
-    guides(fill = "none")  + 
-    ggtitle(types[i])
-  assign(types[i], plot)
-}
-
-#paste(types, collapse = "+")
-`Eff Cycling`+`Eff Early`+`Eff Interm`+`Memory Prec`+SLEC+Tex+Tpex
-ggsave("CD8.ProjecTIL.annotation.mod.png", height = 9, width = 10, dpi = 600)
-
-types <- sort(unique(list$DICE.pruned.labels))
-names <- stringr::str_remove_all(types, " ")
-names <- stringr::str_remove_all(names, "[+]")
-names <- stringr::str_replace_all(names, ",", ".")
-for (i in seq_along(types)) {
-  tmp <- which(meta$DICE.labels == types[i])
-  plot <- basePlot + 
-    stat_density_2d(df[tmp,], mapping = aes(x = wnnUMAP_1, 
-                              y = wnnUMAP_2, fill = stat(level)),
-                        geom = "polygon", 
-                    bins = 20) + 
-    theme_void() + 
-    scale_fill_viridis(option = "B") + 
-    guides(fill = "none")  + 
-    ggtitle(types[i])
-  assign(names[i], plot)
-}
-
-paste(names, collapse = "+")
-Bcells.naive+Monocytes.CD14+Monocytes.CD16+NKcells+Tcells.CD4.memoryTREG+Tcells.CD4.naive+Tcells.CD4.naiveTREG+Tcells.CD4.naive.stimulated+Tcells.CD4.TFH+Tcells.CD4.Th1+Tcells.CD4.Th1_17+Tcells.CD4.Th17+Tcells.CD4.Th2+Tcells.CD8.naive+Tcells.CD8.naive.stimulated + plot_layout(ncol = 3)
-ggsave("DICE.annotation.png", height = 15, width = 10, dpi = 600)
-```
-
-
-```{r}
-meta <- list[[]]
-
-tissue <- table(list$Tissue, list$seurat_clusters, useNA = "ifany")
-for (i in 1:2) {
-  tissue[i,] <- tissue[i,]/sum(tissue[i,])
-}
-tissue <- as.data.frame(tissue)
-tissue$Var2 <- factor(tissue$Var2, levels = paste0("C", 1:33))
-ggplot(tissue, aes(x = Var2, fill = Var1, y = Freq)) + 
-  geom_bar(stat = "identity", position = "fill") + 
-  geom_hline(yintercept = 0.5) + 
-  geom_hline(yintercept = c(0.4, 0.6), lty = 2) + 
-  coord_flip() +
-  theme_classic() + 
-  scale_fill_manual(values = rev(viridis_pal(option = "F")(4)))
-
-
-CD4.annot <- table(list$CD4.annot.mod, list$seurat_clusters, useNA = "ifany")
-for (i in seq_len(nrow(CD4.annot))) {
-  CD4.annot[,i] <- CD4.annot[,i]/sum(CD4.annot[,i])
-}
-CD4.annot <- as.data.frame(CD4.annot)
-CD4.annot$Var2 <- factor(CD4.annot$Var2, levels = paste0("C", 1:33))
-
-ggplot(CD4.annot, aes(x = Var2, fill = Var1, y = Freq)) + 
-  geom_bar(stat = "identity", position = "fill") + 
-  geom_hline(yintercept = 0.5) + 
-  geom_hline(yintercept = c(0.4, 0.6), lty = 2) + 
-  coord_flip() +
-  theme_classic() +
-  labs(fill = "CellType") + 
-  scale_fill_manual(values = rev(viridis_pal(option = "H")(length(unique(CD4.annot$Var1)))))+ 
-  theme(axis.title = element_blank())
-ggsave("CD4.mod.distribution.pdf", height = 4, width = 5)
-
-
-CD8.annot <- table(list$CD8.annot.mod, list$seurat_clusters, useNA = "ifany")
-for (i in seq_len(nrow(CD8.annot))) {
-  CD8.annot[,i] <- CD8.annot[,i]/sum(CD8.annot[,i])
-}
-CD8.annot <- as.data.frame(CD8.annot)
-CD8.annot$Var2 <- factor(CD8.annot$Var2, levels = paste0("C", 1:33))
-
-ggplot(CD8.annot, aes(x = Var2, fill = Var1, y = Freq)) + 
-  geom_bar(stat = "identity", position = "fill") + 
-  geom_hline(yintercept = 0.5) + 
-  geom_hline(yintercept = c(0.4, 0.6), lty = 2) + 
-  coord_flip() +
-  theme_classic() +
-  labs(fill = "CellType") + 
-  scale_fill_manual(values = rev(viridis_pal(option = "H")(length(unique(CD8.annot$Var1)))))+ 
-  theme(axis.title = element_blank())
-ggsave("CD8.mod.distribution.pdf", height = 4, width = 5)
-```
-
-
-## ImmunoMind Annotation
-
-```{r}
-Helper <- readxl::read_xlsx("./data/Annotation/ImmunoMind/IM_helper.xlsx")
-names <- Helper$Marker
-Helper <- as.data.frame(Helper[,-1])
-rownames(Helper) <- names
-
-Major <- readxl::read_xlsx("./data/Annotation/ImmunoMind/IM_major.xlsx")
-names <- Major$Marker
-Major <- as.data.frame(Major[,-1])
-rownames(Major) <- names
-
-```
-
-
-```{r}
-DefaultAssay(list) <- "RNA"
-markers <- FindAllMarkers(list)
-write.csv(markers, "FindAllMarkers.csv")
-markers <- read.csv("FindAllMarkers.csv")
-
-unwanted_genes <- "TRBV*|^TRBD*|^TRBJ*|^TRDV*|^TRDD*|^TRDJ*|^TRAV*|^TRAJ*|^TRGV*|^TRGJ*|^MT-*|^RPS*|^RPL*"
-markers2 <- markers[!grepl(pattern = unwanted_genes, x = markers$gene),]
-
-top50 <- markers2 %>%
-  group_by(cluster) %>%
-  top_n(50, avg_log2FC)
-```
-
-```{r}
-annotation <- Helper
-markers <- top50
-
-#sc is the single-cell object, right now it is formated only for Seurat
-#markers is the filter top x output from FindMarkers
-#annotation is the annotation file provided in excel
-IM.score <- function(sc, markers, annotation) {
-  annotation.list <- list()
-  #make FindMarker object into list
-  marker.list <- split(markers, markers[,"cluster"])
-  #Make annotation lists for each subtype
-  for (x in seq_len(ncol(annotation))) { 
-    full <- rownames(annotation)[which(annotation[,x] == 1)]
-    half <- rownames(annotation)[which(annotation[,x] == 0.5)]
-    tmp <- list(full, half)
-    annotation.list[[x]] <- tmp
-  }
-  names(annotation.list) <- colnames(annotation)
-  score.matrix <- matrix(nrow = length(marker.list), ncol = length(annotation.list), 0)
-  #Loop through the annotation scoring 
-  #Score is scaled by the total number of genes in the annotated cell type that is expressed in the count data
-  for (y in seq_along(marker.list)) {
-    for(z in seq_along(annotation.list)) {
-      full.denominator <- rownames(sc@assays$RNA@counts)[rownames(sc@assays$RNA@counts) %in% annotation.list[[z]][[1]]]
-      if(length(full.denominator) == 0) {
-        full.denominator <- 1
-      }
-      half.denominator <- rownames(sc@assays$RNA@counts)[rownames(sc@assays$RNA@counts) %in% annotation.list[[z]][[2]]]
-      if(length(half.denominator) == 0) {
-        half.denominator <- 1
-      }
-      full.score <- length(which(marker.list[[y]]$gene %in% annotation.list[[z]][[1]]))/length(full.denominator)
-      half.score <- length(which(marker.list[[y]]$gene %in% annotation.list[[z]][[2]]))/length(half.denominator)
-      total.score <- full.score + half.score/2
-      score.matrix[y,z] <- total.score
-    }
-  }
-  colnames(score.matrix) <- names(annotation.list)
-  rownames(score.matrix) <- names(marker.list)
-  return(score.matrix)
-}
-
-scores.major <- IM.score(list,top50, Major)
-pheatmap::pheatmap(scores.major, cluster_rows = FALSE, color = viridis_pal()(50))
-
-scores.helper <- IM.score(list,top50, Helper)
-pheatmap::pheatmap(scores.helper, cluster_rows = FALSE, color = viridis_pal()(50))
-```
-
-
-
-```{r}
-library(Seurat)
-library(dplyr)
-library(Trex)
-list <- readRDS("./data/Fullintegrated_seuratObjects.rds")
-cells.chains <- rownames(list[[]][!is.na(list[["cloneType"]]),])
-Tcells <- subset(list, cells = cells.chains)
-
-cells.chains <- rownames(Tcells[[]][!is.na(Tcells[["CD4.annot"]]),])
-Tcells <- subset(Tcells, cells = cells.chains)
-
-Tcells <- DietSeurat(Tcells, assays = c("RNA", "ADT"))
-DefaultAssay(Tcells) <- "RNA"
-list <- SplitObject(Tcells, "orig.ident")
-
-#############################################################
-#Calculating Variable Genes and Removing TCR-related genes
-############################################################
-list <- lapply(X = list, FUN = function(x) {
-    x <- NormalizeData(x)
-    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
-    x <- quietTCRgenes(x)
-})
-
-  
-#####################
-#Integrating RNA
-###################
-
-# select features that are repeatedly variable across datasets for integration
-features <- SelectIntegrationFeatures(object.list = list)
-
-immune.anchors <- FindIntegrationAnchors(object.list = list, anchor.features = features)
-# this command creates an 'integrated' data assay
-immune.combined <- IntegrateData(anchorset = immune.anchors)
-immune.combined <- ScaleData(immune.combined, verbose = FALSE)
-immune.combined <- RunPCA(immune.combined, npcs = 30, verbose = FALSE)
-
-saveRDS(immune.combined, file = "./data/RNAintegrated_Tcell_seuratObjects.rds")
-rm(features)
-rm(immune.anchors)
-rm(immune.combined)
-
-DefaultAssay(list[[1]])
-############################
-#Integrating ADT
-############################
-DefaultAssay(Tcells) <- "ADT"
-list <- SplitObject(Tcells, "orig.ident")
-features <- rownames(list[[1]][["ADT"]])
-
-list <- lapply(X = list, FUN = function(x) {
-    DefaultAssay(x) <- "ADT"
-    x <- ScaleData(x, features = features, verbose = FALSE)
-    x <- RunPCA(x, features = features, verbose = FALSE)
-})
-
-ADT.anchors <- FindIntegrationAnchors(object.list = list, reference = c(1, 2), reduction = "rpca", 
-    dims = 1:30, assay = rep("ADT", 14), anchor.features = 37)
-ADT.integrated <- IntegrateData(anchorset = ADT.anchors, dims = 1:30)
-ADT <- ADT.integrated@assays$integrated
-rm(ADT.anchors)
-rm(ADT.integrated)
-
-############################
-#Combining all to single object
-############################
-list <- readRDS("./data/RNAintegrated_Tcell_seuratObjects.rds")
-list[["ADT.integrated"]] <- ADT
-
-DefaultAssay(list) <- 'ADT.integrated'
-VariableFeatures(list) <- rownames(list[["ADT.integrated"]])
-list <-  list %>% 
-  ScaleData() %>% RunPCA(reduction.name = 'apca')
-
-saveRDS(list, file = "./data/Fullintegrated_Tcell_seuratObjects.rds")
-
-```
-
-```{r}
-list <- readRDS("./data/Fullintegrated_Tcell_seuratObjects.rds")
-
-RNA.neighbors <- FindNeighbors(list@reductions$pca@cell.embeddings, 
-                               annoy.metric = "cosine", 
-                               k.param = 30)
-saveRDS(RNA.neighbors, "RNA.neighbors.rds")
-ADT.neighbors <- FindNeighbors(list@reductions$apca@cell.embeddings, 
-                               annoy.metric = "cosine", 
-                               k.param = 30)
-saveRDS(ADT.neighbors, "ADT.neighbors.rds")
-
-meta <- list[[]]
-saveRDS(meta, "Tcell.meta.rds")
-```
-
-
-```{r}
-list <- readRDS("./data/Fullintegrated_Tcell_seuratObjects.rds")
-ADT.neighbors <- readRDS("ADT.neighbors.rds")
-RNA.neighbors <- readRDS("RNA.neighbors.rds")
-
-graph.names <- paste0("RNA_", names(RNA.neighbors))
-for(i in seq_len(length(graph.names))) {
-          suppressWarnings(list[[graph.names[i]]] <- RNA.neighbors[[i]])
-}
-
-graph.names <- paste0("ADT_", names(RNA.neighbors))
-for(i in seq_len(length(graph.names))) {
-          suppressWarnings(list[[graph.names[i]]] <- ADT.neighbors[[i]])
-}
-
-x <- Seurat:::FindModalityWeights(object = list, 
-                reduction.list = c("pca", "apca"),
-                dims.list = list(1:30,1:30),
-                k.nn = 30)
-```
-
-
-
